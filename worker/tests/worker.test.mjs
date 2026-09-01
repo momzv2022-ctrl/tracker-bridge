@@ -172,6 +172,13 @@ function stubHttp(options = {}) {
   };
 }
 
+
+/** A `.torrent` with no announce and no announce-list: nothing to announce to. */
+function bencodeNoTrackers(name) {
+  const info = { name, "piece length": 262144, pieces: Buffer.alloc(20), length: 1024, private: 1 };
+  return new Uint8Array(bencode({ info }));
+}
+
 const queryOf = (extra = {}) => ({
   q: "", cat: "", year: "", res: "", minSeeders: 0, sort: "", limit: 50, offset: 0, terms: "",
   ...extra,
@@ -343,6 +350,50 @@ test("the magnet announces where the swarm actually is", async () => {
   assert.ok(row.magnet.includes(encodeURIComponent(ANNOUNCE)));
   assert.equal(row.magnet.includes("opentrackr"), false);
   assert.notEqual(magnetFor(row.infohash, row.name), row.magnet);
+});
+
+test("a private row never announces to a public tracker, even with nothing to announce to", async () => {
+  // Announcing a private tracker's infohash to a public one publishes its swarm,
+  // and is the sort of thing accounts are closed over. The fallback to the
+  // public five is for a row that does not know its own trackers; a private row
+  // that could not read any must carry none rather than borrow those.
+  const http = stubHttp({
+    file: () => ({ status: 200, body: bencodeNoTrackers("Nothing To Announce To") }),
+    list: {
+      status: 200,
+      body: JSON.stringify({
+        numFound: 1,
+        torrentList: [{ ...LIST.torrentList[0], name: "Nothing To Announce To", fid: "2000001" }],
+      }),
+    },
+  });
+  const answer = await search(queryOf({ q: "nothing", limit: 1 }), http, settingsFrom(), "https://b.example");
+  const row = answer.body.torrents[0];
+  assert.match(row.infohash, /^[0-9a-f]{40}$/);
+  assert.equal(row.magnet.includes("&tr="), false, row.magnet);
+  assert.equal(row.magnet.includes("opentrackr"), false);
+});
+
+test("BRIDGE_ANNOUNCE_HTTP rewrites the magnet's announce, and only the scheme", async () => {
+  // Some clients cannot make an https announce at all. This is the escape
+  // hatch, and it puts the passkey in the clear, so it is off by default and
+  // /healthz says which way it is set.
+  const plain = await search(
+    queryOf({ q: "bunny", limit: 1 }), stubHttp(), settingsFrom(), "https://b.example",
+  );
+  assert.ok(plain.body.torrents[0].magnet.includes(encodeURIComponent(ANNOUNCE)));
+
+  const rewritten = await search(
+    queryOf({ q: "bunny", limit: 1 }), stubHttp(), settingsFrom({ BRIDGE_ANNOUNCE_HTTP: "1" }), "https://b.example",
+  );
+  const magnet = rewritten.body.torrents[0].magnet;
+  assert.ok(magnet.includes(encodeURIComponent(ANNOUNCE.replace("https://", "http://"))), magnet);
+  assert.equal(magnet.includes(encodeURIComponent(ANNOUNCE)), false);
+  // The infohash is a fact about the file and does not move with the scheme.
+  assert.equal(rewritten.body.torrents[0].infohash, plain.body.torrents[0].infohash);
+
+  assert.equal(healthz(settingsFrom()).announce_http, false);
+  assert.equal(healthz(settingsFrom({ BRIDGE_ANNOUNCE_HTTP: "1" })).announce_http, true);
 });
 
 test("resolving is bounded, and never runs past the page", async () => {

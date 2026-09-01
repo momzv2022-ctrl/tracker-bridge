@@ -198,6 +198,23 @@ swarm.
 The RSS route is preferred because it cannot be broken by a session expiring
 mid-search, and because it keeps a `.torrent` fetch from depending on a login.
 
+## The tracker itself
+
+`tracker.torrentleech.org` resolves to Cloudflare addresses (`172.66.x`), and
+serves **both** http and https on the announce paths, with no redirect from one
+to the other. Checked 2026-09-01:
+
+```
+http  /a/<bad-passkey>/announce -> 404
+https /a/<bad-passkey>/announce -> 404          cert: Google Trust Services, verifies
+```
+
+That is what `BRIDGE_ANNOUNCE_HTTP` relies on. It exists because a libtorrent
+without a CA bundle — the usual state of affairs on Android — fails every https
+tracker with `unspecified system error` and finds no peers at all, while the
+same announce over http works. The passkey then travels in the clear, so it is
+off by default and `/healthz` reports which way it is set.
+
 ## Categories
 
 The full id list is in `TL_CATEGORY`, copied from `caps.categorymappings`. Two

@@ -199,6 +199,7 @@ Only the first two matter, and the second is really "one of these".
 | `BRIDGE_TIMEOUT_S` | How long to wait. Default `45`. |
 | `BRIDGE_BROWSE_ROWS` | Rows for a search with no words in it. Default `25`. `0` answers those instantly without asking the tracker. |
 | `BRIDGE_TORRENT_URLS` | Advertise `torrent_url` on every row. Default **off** — see below, it changes what a client believes about peers. |
+| `BRIDGE_ANNOUNCE_HTTP` | Rewrite the magnet's announce URLs from https to http. Default **off**. **Your passkey travels in the clear.** See below. |
 | `BRIDGE_TORRENTFILE_TTL_S` | How long a `torrent_url` stays valid. Default `3600`. |
 | `BRIDGE_USER_AGENT` | What to call itself. Defaults to a browser's, on purpose — see the file. |
 | `BRIDGE_CORS_ORIGINS` | Web pages allowed to call this, comma separated. Empty means none but the setup page. |
@@ -285,6 +286,38 @@ The answer is the same shape the
 [Unified Torrent Search Interface](https://github.com/momzv2022-ctrl/unified-torrent-search-interface)
 produce, down to the percent-encoding in the magnet, so an app can hold results
 from all three without seeing two of everything.
+
+## If nothing ever finds a peer
+
+A row with hundreds of seeders that sits at "no one connected" is almost always
+the announce, and there are two ways it goes wrong. Both leave the same
+symptom, and your client's own diagnostics tell them apart.
+
+**The announce fails at the TLS layer.** TorrentLeech's tracker is https only in
+its `.torrent`, and a libtorrent built without a CA bundle — which is the usual
+state of affairs on Android — cannot verify any certificate and fails every
+https tracker with `unspecified system error` before it sends a byte. Nothing
+about the swarm is wrong; the client simply never asked.
+
+`BRIDGE_ANNOUNCE_HTTP=1` is the escape hatch. TorrentLeech's tracker serves
+plain http on the same paths and does not redirect, so the announce lands. The
+price is blunt: **your passkey is in that URL, and http sends it in the clear**
+to every network between the device and the tracker. It identifies your account.
+Weigh that against a client that cannot play anything, and make the choice
+deliberately — which is why this is off by default and why `/healthz` reports
+`announce_http` either way.
+
+**The client added its own trackers.** Some clients append a list of public
+trackers to every torrent they open. On a private torrent that does not merely
+fail — it announces your tracker's infohash to a public tracker, which publishes
+that swarm, and is the sort of thing accounts are closed over. It also fills the
+diagnostics with `udp://…` timeouts that look like the problem and are not.
+
+This bridge never contributes to that. A row whose `.torrent` has been read
+carries **only that file's announce list**, and a private row that could not
+read one carries no trackers at all rather than borrowing the public five. If
+you see public trackers on a private row, they came from your client, and that
+is worth turning off.
 
 ## Adding another tracker
 

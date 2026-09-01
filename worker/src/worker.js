@@ -247,6 +247,21 @@ function readSettings(env) {
     // across the several an edge network may run at once.
     requestGapMs: envInt(env, "BRIDGE_REQUEST_GAP_MS", 300, 0, 10000),
 
+    // Announce over http rather than https, in the magnet only.
+    //
+    // **Off, and think before turning it on: your passkey is in that URL and
+    // http sends it in the clear**, to every network between the device and the
+    // tracker. It is here because some clients cannot make an https announce at
+    // all — a libtorrent built without a CA bundle, which is the usual state of
+    // affairs on Android, fails every https tracker with "unspecified system
+    // error" and finds no peers, while the same announce over http works. When
+    // that is the choice, a working private tracker on http may beat a broken
+    // one on https; it is not this file's decision to make quietly.
+    //
+    // TorrentLeech's tracker serves both, and does not redirect http to https,
+    // so the rewrite reaches it. Checked 2026-09-01.
+    announceHttp: envFlag(env, "BRIDGE_ANNOUNCE_HTTP", false),
+
     // Whether to advertise `torrent_url` at all.
     //
     // **Off, and that is not the obvious default.** TSP calls the field the
@@ -464,9 +479,17 @@ function magnetFor(infohash, name, trackers = null) {
   // off DHT and PEX, so the public suffix below is not merely useless there, it
   // is the whole reason a magnet built from it would never find a peer. When the
   // `.torrent` has been read, its own announce list is what goes in.
-  const suffix = trackers && trackers.length
-    ? trackers.map((tracker) => "&tr=" + quote(tracker)).join("")
-    : TRACKER_SUFFIX;
+  //
+  // `null` means "this row does not know its own trackers", and gets the public
+  // five. An **array** — including an empty one — means "use exactly these",
+  // which is how a private torrent says it has its own tracker and no business
+  // announcing anywhere else. Announcing a private tracker's infohash to a
+  // public tracker publishes its swarm, and is the sort of thing accounts are
+  // closed over. The sibling projects only ever pass null or a non-empty list,
+  // so this branch is dead there and the three still agree row for row.
+  const suffix = trackers === null
+    ? TRACKER_SUFFIX
+    : trackers.map((tracker) => "&tr=" + quote(tracker)).join("");
   if (name) return `magnet:?xt=urn:btih:${infohash}&dn=${quote(name)}${suffix}`;
   return `magnet:?xt=urn:btih:${infohash}${suffix}`;
 }
@@ -2028,7 +2051,7 @@ async function resolveWindow(rows, http, settings) {
     if (row.infohash) continue;
     const known = row.cacheKey ? RESOLVED.get(row.cacheKey) : null;
     if (known) {
-      applyTorrent(row, known);
+      applyTorrent(row, known, settings);
       continue;
     }
     if (pending.length < settings.maxResolve) pending.push(row);
@@ -2049,7 +2072,7 @@ async function resolveWindow(rows, http, settings) {
         meta = null;
       }
       if (!meta) return;
-      applyTorrent(row, meta);
+      applyTorrent(row, meta, settings);
       if (row.cacheKey) remember(row.cacheKey, meta);
       resolved += 1;
     }),
@@ -2059,12 +2082,20 @@ async function resolveWindow(rows, http, settings) {
 }
 
 /** What reading a `.torrent` taught, written onto the row. */
-function applyTorrent(row, meta) {
+function applyTorrent(row, meta, settings) {
   row.infohash = meta.infohash;
+  row.private = meta.private;
   // The announce list is the point. `private: 1` turns off DHT and peer
   // exchange, so a magnet carrying the public trackers would name a swarm it
-  // can never reach; the file's own announce URL is the only one that works.
-  if (meta.trackers && meta.trackers.length) row.trackers = meta.trackers;
+  // can never reach — and would publish a private tracker's swarm while failing
+  // to reach it.
+  //
+  // Set even when empty, which is what closes that door: an empty array tells
+  // magnetFor "these and no others", where null would have meant "you decide",
+  // and it decides on the public five.
+  row.trackers = (meta.trackers || []).map((url) =>
+    settings && settings.announceHttp ? url.replace(/^https:\/\//iu, "http://") : url,
+  );
   if (row.sizeBytes === null) row.sizeBytes = meta.sizeBytes;
   if (row.files === null) row.files = meta.files;
   if (!row.name && meta.name) row.name = meta.name;
@@ -2364,6 +2395,9 @@ function healthz(settings) {
     // on that field behaves visibly differently, and "why does every row say
     // direct download" is answered by this line.
     torrent_urls: settings.torrentUrls,
+    // Same reason: a client finding no peers on every row wants to know whether
+    // its announce URLs were rewritten, and this is the only place that says.
+    announce_http: settings.announceHttp,
     version: VERSION,
     runtime: RUNTIME,
     // The one thing worth saying out loud, because it is the reason to run this
