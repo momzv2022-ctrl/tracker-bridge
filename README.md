@@ -1,0 +1,347 @@
+# Tracker bridge
+
+Search your private tracker from an app, without giving that app your tracker
+account.
+
+A private tracker is a website with a login, not an API. It answers a search
+with its own JSON, in its own shape, behind its own session — and it publishes
+no magnet and no infohash at all, because the `.torrent` is behind your passkey.
+No streaming client can read any of that.
+
+This translates. Your app asks it for a search, it asks the tracker as you, and
+it hands back the
+[Torrent Stream Protocol](https://github.com/raul2hot/torrent-stream-protocol):
+an ordinary JSON list of names, sizes, seeders, and a `magnet` and an `infohash`
+on every row.
+
+One file, no dependencies, and short enough to read in a sitting.
+
+**Today it speaks one tracker: TorrentLeech.** Adding another is one entry in
+`TRACKERS` and nothing else — [see below](#adding-another-tracker).
+
+**Why not point the app straight at the tracker?** Two reasons. Your session
+opens your whole account: your profile, your passkey, your ratio, your invites.
+And a tracker's search takes path segments no client sends, returns a shape no
+client reads, and — the part that matters most — gives you nothing that
+identifies the content. This fixes all three: your app gets a key of its own
+that only searches, and an answer it understands.
+
+## The part that costs something
+
+Read this before anything else, because it decides what this can and cannot do.
+
+TorrentLeech's search returns a title, a size, seeder counts and a numeric id.
+It does **not** return a magnet and it does **not** return an infohash — those
+live in the `.torrent`, which is behind your passkey. TSP requires both on every
+row.
+
+So the file is read. For the rows on the page you asked for, the bridge fetches
+the `.torrent` and takes the infohash from the file itself — `sha1` of its info
+dict, so it is the real one rather than a guess. That also fills in the size and
+the file count when the listing did not say.
+
+Three things follow from that, and none of them are optional:
+
+- **One extra request per row shown.** `BRIDGE_MAX_RESOLVE` caps it, at 20 by
+  default. Ask for `limit=50` and you get the first 20 with the rest reported as
+  `unresolved`. Raising it makes a longer page and a heavier search, in that
+  order, and Cloudflare's free plan allows 50 subrequests per request.
+- **`count` is what matched, not what you were handed.** A count of servable
+  rows would be roughly `limit` every time, and you could never tell a full page
+  from the last one. Page against `count`; read `unresolved` for the shortfall.
+- **Infohashes are remembered** for as long as the process lives, keyed by
+  tracker and row id. A second search that turns up the same row costs nothing.
+  It is a cache, not storage: an empty one is slower, never wrong.
+
+## Set it up in your browser
+
+Paste your TorrentLeech details, press a button, and Cloudflare hosts the bridge
+for you. Free, no card, nothing installed, and it works on a phone.
+
+**→ https://momzv2022-ctrl.github.io/tracker-bridge/**
+
+Five short steps: your TorrentLeech details, sign in to Cloudflare, press
+Deploy, open your new bridge and press Finish setup, and your URL and key are
+shown together with a button that tests them.
+
+Everything you type stays in your browser. Your details are written into your
+copy of the file and travel inside the deploy link, after the `#`, which
+browsers never send to a server. They are not saved in your browser, and the
+page makes no network request at all. **Do not forward that deploy link to
+anyone**, and if you would rather your sign-in never sat in a link, the page has
+a route that adds it in the Cloudflare dashboard instead.
+
+## What TorrentLeech needs from you
+
+Two different things, and they do two different jobs.
+
+| | |
+|---|---|
+| **An RSS key** | Fetches the `.torrent`. 20 hex characters, from the RSS link on your TorrentLeech profile. It does not expire. |
+| **A session** | Searches. Either a `tluid`/`tlpass` cookie pair you paste, or a username and password it can log in with. |
+
+The RSS key cannot search and a session alone can still fetch files, so
+strictly you need one of the two — but set both. With an RSS key, fetching files
+never depends on a session that may lapse mid-search.
+
+### The session, and which of the two to give it
+
+**A cookie** is the lighter secret. Nothing in it can be turned back into your
+password, logging out of TorrentLeech ends it, and there is no login request for
+a bot filter to inspect. Log in with **Remember me** ticked — without it `tluid`
+and `tlpass` are never created — then read the two values out of your browser's
+cookie store for `torrentleech.org`.
+
+**A username and password** is the heavier secret and the one that keeps
+working. The bridge logs in by itself when the session lapses: it fetches the
+login form, posts every field on it — including the hidden ones and the remember
+box — and keeps the cookies for as long as the process lives. Set `TL_2FA` to
+your **Alt 2FA Token** (Site Profile) if your account has two-factor on; a
+one-time code from an app will not work, because there is nobody to type it.
+
+Set both if you like. The cookie is used while it works and the login renews it
+when it stops.
+
+### Two things that can go wrong, and what they look like
+
+**A session may be tied to the address it was made at.** A Cloudflare Worker
+calls from Cloudflare, not from your house, so a pasted cookie can be refused for
+that reason alone. You get `tracker_rejected_session`, which says so. The
+username and password route usually works instead; running the file on your own
+machine always does.
+
+**TorrentLeech sits behind a bot filter.** Most of the time a plain request goes
+through. When it does not, the answer is a browser test that a Worker cannot
+take, and you get `tracker_challenged` rather than an empty list. Jackett's own
+indexer definition for this tracker ships a FlareSolverr hint for the same
+reason. There is no way around this from a Worker; run it at home instead.
+
+`/healthz?probe=1` tells you which of the two is happening, if either is.
+
+## Or run it yourself
+
+Both recipes need Node 20 or newer, which is the only thing they need.
+
+### Recipe A: on your own machine
+
+The one that always works: the request comes from your own address, which is
+also the address the cookie was made at.
+
+```sh
+curl -fsSLO https://raw.githubusercontent.com/momzv2022-ctrl/tracker-bridge/main/worker/src/worker.js
+BRIDGE_API_KEY=$(openssl rand -hex 16) \
+TL_COOKIE='tluid=123456; tlpass=your-tlpass-value' \
+TL_RSSKEY=your20charrsskeyhere \
+node worker.js
+```
+
+It prints the URL it is serving on and whether it is ready. Point your app at
+that URL and that key.
+
+To reach it from outside the house, put a Cloudflare Tunnel in front of the
+bridge. To keep it running, use whatever already runs things on that machine. A
+systemd unit:
+
+```ini
+[Service]
+Environment=BRIDGE_API_KEY=your-bridge-key
+Environment=TL_COOKIE=tluid=123456; tlpass=your-tlpass-value
+Environment=TL_RSSKEY=your20charrsskeyhere
+ExecStart=/usr/bin/node /opt/tracker-bridge/worker.js
+Restart=always
+```
+
+### Recipe B: at Cloudflare
+
+Free, and the URL stays up when your machine sleeps.
+
+```sh
+curl -fsSLO https://raw.githubusercontent.com/momzv2022-ctrl/tracker-bridge/main/worker/src/worker.js
+npx wrangler deploy worker.js --name tracker-bridge --compatibility-date 2026-08-18
+npx wrangler secret put BRIDGE_API_KEY
+npx wrangler secret put TL_COOKIE
+npx wrangler secret put TL_RSSKEY
+```
+
+`wrangler` opens your browser once to sign in, then prints your URL. Put all
+three in as secrets rather than variables: every one of them is a credential.
+
+Cloudflare's free plan covers 100,000 requests a day and needs no card.
+
+## Settings
+
+Only the first two matter, and the second is really "one of these".
+
+| | |
+|---|---|
+| `BRIDGE_API_KEY` | What your app sends here, as `X-API-Key`. At least 16 characters, or the bridge refuses to serve. |
+| `TL_COOKIE` | A TorrentLeech session: `tluid=…; tlpass=…`. Anything else in the string is dropped. |
+| `TL_USERNAME`, `TL_PASSWORD` | Instead of, or alongside, the cookie. Lets it log in again when the session lapses. |
+| `TL_2FA` | The Alt 2FA Token from Site Profile. Only if your account has 2FA. |
+| `TL_RSSKEY` | 20 hex characters, from your profile's RSS link. Fetches `.torrent` files without a session. |
+| `TL_HOST` | Default `https://www.torrentleech.org`. The alternates exist for when that name is blocked. |
+| `TL_FREELEECH` | Only return freeleech releases. Default off. |
+| `TL_EXCLUDE_SCENE` | Leave scene releases out. Default off. |
+| `BRIDGE_TRACKERS` | Which trackers to switch on, comma separated. Empty means every configured one. |
+| `BRIDGE_MAX_RESOLVE` | Most rows per page whose `.torrent` is read. Default `20`. **This is the length of your results.** `0` empties every answer. |
+| `BRIDGE_RESOLVE_CONCURRENCY` | How many of those may be in flight at once. Default `3`. |
+| `BRIDGE_REQUEST_GAP_MS` | Smallest gap between two requests to one tracker. Default `300`. |
+| `BRIDGE_TIMEOUT_S` | How long to wait. Default `45`. |
+| `BRIDGE_BROWSE_ROWS` | Rows for a search with no words in it. Default `25`. `0` answers those instantly without asking the tracker. |
+| `BRIDGE_TORRENTFILE_TTL_S` | How long a `torrent_url` stays valid. Default `3600`. |
+| `BRIDGE_USER_AGENT` | What to call itself. Defaults to a browser's, on purpose — see the file. |
+| `BRIDGE_CORS_ORIGINS` | Web pages allowed to call this, comma separated. Empty means none but the setup page. |
+| `BRIDGE_ALLOW_ANONYMOUS` | Serve with no key at all. On a public URL this hands your tracker account to anyone who finds it. |
+| `BRIDGE_PORT`, `BRIDGE_HOST` | Node only. Default `8788` and `127.0.0.1`. Set `0.0.0.0` to accept from the LAN. |
+
+## What your app gets
+
+Four routes, one header, JSON out.
+
+```sh
+curl -H "X-API-Key: YOUR-BRIDGE-KEY" \
+  "http://127.0.0.1:8788/api/v1/search?q=big+buck+bunny&limit=5"
+```
+
+`/api/v1/search` takes `q`, and optionally `cat`, `year`, `res`, `min_seeders`,
+`sort`, `limit` and `offset`. It answers with `torrents`, each carrying a
+`magnet`, an `infohash`, a name, a size, seeder and leecher counts, and whatever
+the release name gives up: year, resolution, codec, source, season, episode.
+
+Three fields are not in the contract, and a client that does not know them
+ignores them: `total_found` is what the tracker said it had, `unresolved` is how
+many rows on this page could not be read, and `degraded` names a tracker that
+failed while another answered.
+
+Every row also carries a **`torrent_url` pointing at this bridge**, never at the
+tracker:
+
+```
+https://your-bridge.example/api/v1/torrentfile/<infohash>?t=<token>
+```
+
+That URL matters more here than anywhere else. A private torrent sets
+`private: 1`, which turns off DHT and peer exchange — so the magnet, which TSP
+requires on every row and which is still sent, cannot reach the swarm on its
+own. The `.torrent` can, because your passkey is in its announce URL. Point your
+client at `torrent_url` and it works.
+
+The token is **sealed, not signed**: AES-GCM under your own `BRIDGE_API_KEY`, so
+what your app holds is an opaque string it cannot read. Your RSS key and your
+session stay on the server, which is the point of the whole bridge. The route
+still requires your key, refuses a token it did not mint, refuses one that has
+expired, refuses one aimed at a host no configured tracker owns, and refuses a
+file whose infohash is not the one in the URL.
+
+`/healthz` needs no key and reports configuration only — whether each credential
+is set, never what it is — so it makes no request of its own. `/healthz?probe=1`
+needs the key and asks the tracker: whether it answers, whether it still accepts
+your session, and how much it says it has.
+
+That last one matters more than it sounds. **A dead session and a search with no
+results look identical** from a client. `?probe=1` is where the difference
+shows.
+
+The answer is the same shape the
+[Prowlarr bridge](https://github.com/momzv2022-ctrl/prowlarr-bridge) and the
+[Unified Torrent Search Interface](https://github.com/momzv2022-ctrl/unified-torrent-search-interface)
+produce, down to the percent-encoding in the magnet, so an app can hold results
+from all three without seeing two of everything.
+
+## Adding another tracker
+
+Section 5 of the file is the only part that knows what a tracker is. An entry in
+`TRACKERS` is six things:
+
+```js
+{
+  id, label,        // what it is called, in a setting and on a screen
+  read(env),        // its settings, or null when it is not configured at all
+  search(...),      // a query in, rows out
+  probe(...),       // a live answer for /healthz?probe=1
+  fileRequest(...), // where a row's .torrent is, and what to send with it
+}
+```
+
+Sections 2 to 4 — the name parser, the merge, the filters, the wire shape — do
+not change, and neither do the routes. `BRIDGE_TRACKERS` then selects which
+combination is live, and a search fans out across all of them and merges the
+answers.
+
+## Check it before you trust it
+
+- **It is one file.** [`worker/src/worker.js`](worker/src/worker.js). No
+  dependencies, no build step, no minifier. What you run is what you read.
+- **Search it for `fetch(`.** There is one, and it goes to `TL_HOST`. Nothing
+  else is contacted, ever, and there is no telemetry.
+- **Your credentials go into headers, on requests to the tracker.** Never into a
+  query string, where they would land in access logs. CI asserts that no
+  keyless route ever returns one.
+- **Your app's key is compared in constant time**, so it cannot be guessed one
+  character at a time.
+- **The published file is this file.** A public GitHub Actions run copies it to
+  the setup page and prints its SHA-256, which the page shows and
+  [`worker.js.sha256`](https://momzv2022-ctrl.github.io/tracker-bridge/worker.js.sha256)
+  publishes. Download it and run `shasum -a 256 worker.js`.
+- **The setup page fetches nothing.** It mints your key with
+  `crypto.getRandomValues`, writes your settings into your copy of the file, and
+  never makes a request. A browser check opens it at five screen sizes on every
+  push and fails the build if it ever reaches the network.
+- **The tests run offline**, on Node 20, 22 and 24, on every push. TorrentLeech
+  is a table of recorded rows, and the whole answer is frozen in
+  [`worker/tests/golden/search.json`](worker/tests/golden/search.json), so any
+  change to what a client receives shows up as a diff a person has to approve.
+
+```sh
+npm test
+```
+
+## What it does not do
+
+- **It does not fetch a `.torrent` for a row nobody looked at.** Only rows on
+  the page being answered, up to `BRIDGE_MAX_RESOLVE`. The rest are reported as
+  `unresolved` rather than silently missing.
+- **It pages over one page of the tracker's own.** TorrentLeech's list endpoint
+  has no page size in the URL — it serves however many rows your profile's
+  *Torrents per page* is set to. Set that to 100 on your own profile and there
+  is more to page through. `total_found` says how much it had in total.
+- **`cat=image` and `cat=archive` are best effort.** TorrentLeech has no image
+  category and no archive category, so those two searches go out unfiltered and
+  are narrowed by reading release names. The other four are filtered by the
+  tracker itself.
+- **`/api/v1/stats` is deliberately absent.** Counting a catalogue would mean a
+  request per category on every call, and TSP says a client that cannot read it
+  offers every category — which is the right answer here.
+- **It searches nothing itself.** What the tracker has, how fast it answers, and
+  anything that goes wrong with your account is between you and them.
+
+## Privacy
+
+It **keeps no log**. Nothing is written anywhere: there is no database, no file
+and no state between requests. The two things it holds in memory — infohashes it
+has learned, and a session it has logged in for — die with the process.
+
+It is not anonymity. The tracker sees the query, and on the Cloudflare path
+Cloudflare carries it. What it does do is keep your session, your password and
+your passkey on the server side of the line.
+
+There is **no public instance of this and no list of other people's**. The only
+one that exists is the one you run.
+
+**One thing to know, and it is the important one.** A magnet built from a
+private tracker's `.torrent` carries that file's announce URL, and **your
+passkey is in it**. That is what makes it work in your own client, and it is
+also why a magnet from one of these rows is not a thing to paste anywhere: it
+identifies your account, and on most trackers sharing it is what ends one. The
+same is true of the `.torrent` itself, which is why the route that serves it
+wants your key and is served `no-store`.
+
+## Your responsibility
+
+This searches a site you have an account on, using your own account. Laws about
+what you may download differ from country to country, and so do TorrentLeech's
+own rules — about ratio, about seeding time, and about where your passkey may
+go. Complying with both is yours to do. Nothing here is legal advice.
+
+MIT licence, and it is provided **without warranty of any kind**, with the
+authors **not liable** for any claim or damages arising from it or from its use.
