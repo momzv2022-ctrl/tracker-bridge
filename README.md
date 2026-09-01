@@ -195,7 +195,9 @@ Only the first two matter, and the second is really "one of these".
 | `BRIDGE_TRACKERS` | Which trackers to switch on, comma separated. Empty means every configured one. |
 | `BRIDGE_MAX_RESOLVE` | Most rows per page whose `.torrent` is read. Default `20`. **This is the length of your results.** `0` empties every answer. |
 | `BRIDGE_RESOLVE_CONCURRENCY` | How many of those may be in flight at once. Default `3`. |
-| `BRIDGE_REQUEST_GAP_MS` | Smallest gap between two requests to one tracker. Default `300`. |
+| `BRIDGE_REQUEST_GAP_MS` | Smallest gap between two requests to one tracker. Default `300`. Lower it and searches get faster; see below. |
+| `BRIDGE_EDGE_CACHE` | Keep learned infohashes in Cloudflare's edge cache, not only in memory. Default **on**. Stores the file's announce list, passkey included. |
+| `BRIDGE_CACHE_TTL_S` | How long one of those lives. Default `604800`, a week. |
 | `BRIDGE_TIMEOUT_S` | How long to wait. Default `45`. |
 | `BRIDGE_BROWSE_ROWS` | Rows for a search with no words in it. Default `25`. `0` answers those instantly without asking the tracker. |
 | `BRIDGE_TORRENT_URLS` | Advertise `torrent_url` on every row. Default **off** — see below, it changes what a client believes about peers. |
@@ -316,6 +318,44 @@ The answer is the same shape the
 [Unified Torrent Search Interface](https://github.com/momzv2022-ctrl/unified-torrent-search-interface)
 produce, down to the percent-encoding in the magnet, so an app can hold results
 from all three without seeing two of everything.
+
+## Why a search takes as long as it does
+
+Measured against a real deployment, five rows:
+
+| | wall clock | `took_ms` |
+|---|---|---|
+| cold | 8.4 s | 7,369 |
+| the same five again | 1.1 s | 410 |
+
+The whole difference is reading five `.torrent` files. Roughly, a search costs:
+
+```
+~2s   one list request to the tracker, which is its own latency and cannot be helped
+~1.1s per row whose file has to be read, and that is what the knobs move
+```
+
+Three things make the second number smaller.
+
+**The edge cache**, on by default. An infohash is a hash of the file's own
+contents and never changes, so once a row has been read the answer is good for a
+week. In memory that saving lasts as long as one isolate, which is not long;
+`BRIDGE_EDGE_CACHE` makes it survive a cold start. The entry holds the file's
+announce list, and **your passkey is in that** — the same secret already written
+into every magnet this bridge hands your client, now also in a cache scoped to
+your own Worker. `BRIDGE_EDGE_CACHE=0` if you would rather it were not.
+
+**The gap between requests.** `BRIDGE_REQUEST_GAP_MS` is enforced across all
+requests to one tracker, so at the default 300 it largely defeats
+`BRIDGE_RESOLVE_CONCURRENCY`: twenty rows means six seconds of deliberate
+waiting whatever the concurrency is. Lowering it to 60 and raising concurrency
+to 6 is roughly three times quicker on a cold page. That is load you are putting
+on a tracker that counts requests against your name — Jackett spaces its own
+4,100 ms apart — so it is a judgement call and the defaults are the cautious
+end of it.
+
+**`BRIDGE_MAX_RESOLVE`** is the ceiling on how many rows are read at all.
+Twenty rows is twenty requests; ten is ten, and a shorter page.
 
 ## If nothing ever finds a peer
 

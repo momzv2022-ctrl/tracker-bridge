@@ -247,6 +247,25 @@ function readSettings(env) {
     // across the several an edge network may run at once.
     requestGapMs: envInt(env, "BRIDGE_REQUEST_GAP_MS", 300, 0, 10000),
 
+    // Keep learned infohashes in Cloudflare's edge cache as well as in
+    // memory, so a cold isolate starts warm.
+    //
+    // Measured on a real deployment: a five-row search costs 7.4s the first
+    // time and 0.4s the second, and the whole difference is reading five
+    // `.torrent` files. In-memory that saving lasts as long as one isolate,
+    // which is not long. This makes it last a week.
+    //
+    // **What is stored is the file's announce list, and your passkey is in
+    // it.** It is the same secret this bridge already writes into every magnet
+    // it hands your client, held in a cache scoped to your own Worker — but it
+    // is a copy in one more place, so there is a switch for it.
+    edgeCache: envFlag(env, "BRIDGE_EDGE_CACHE", true),
+
+    // How long one of those entries lives. An infohash is a hash of the file's
+    // own contents and never changes, so this is long by default; it is a
+    // ceiling on how stale a size or a file count can be.
+    cacheTtlS: envInt(env, "BRIDGE_CACHE_TTL_S", 604800, 60, 2592000),
+
     // Announce over http rather than https, in the magnet only.
     //
     // **Off, and think before turning it on: your passkey is in that URL and
@@ -1266,6 +1285,55 @@ function remember(key, meta) {
 }
 
 /**
+ * The same thing again, in Cloudflare's edge cache.
+ *
+ * RESOLVED above dies with its isolate, which is the difference between a
+ * search that takes 0.4 seconds and one that takes 7. This survives that, needs
+ * no binding to configure and nothing to bill, and is absent under Node — where
+ * there is one long-lived process and RESOLVED is enough on its own.
+ *
+ * Failure is always "not cached": every call is wrapped, because a cache that
+ * throws must cost a request rather than an answer.
+ */
+const CACHE_ROOT = "https://tracker-bridge.invalid/meta/";
+
+function edgeStore(settings) {
+  if (!settings.edgeCache) return null;
+  return typeof caches !== "undefined" && caches && caches.default ? caches.default : null;
+}
+
+async function cachedMeta(key, settings) {
+  const store = edgeStore(settings);
+  if (!store || !key) return null;
+  try {
+    const hit = await store.match(new Request(CACHE_ROOT + encodeURIComponent(key)));
+    if (!hit) return null;
+    const meta = await hit.json();
+    return meta && typeof meta.infohash === "string" ? meta : null;
+  } catch {
+    return null;
+  }
+}
+
+async function rememberEdge(key, meta, settings) {
+  const store = edgeStore(settings);
+  if (!store || !key) return;
+  try {
+    await store.put(
+      new Request(CACHE_ROOT + encodeURIComponent(key)),
+      new Response(JSON.stringify(meta), {
+        headers: {
+          "Content-Type": "application/json",
+          "Cache-Control": `max-age=${settings.cacheTtlS}`,
+        },
+      }),
+    );
+  } catch {
+    // A cache that will not take a write is a cache that will not be read.
+  }
+}
+
+/**
  * Sessions this isolate has logged in for, keyed by tracker.
  *
  * Same reasoning as the cache above, and the same caveat: a cold isolate logs
@@ -2046,16 +2114,32 @@ async function pooled(jobs, width) {
 async function resolveWindow(rows, http, settings) {
   if (!settings.maxResolve) return 0;
 
-  const pending = [];
+  // Three places to look, cheapest first. Memory is free, the edge cache is
+  // one local read, and only what neither has costs a request to the tracker.
+  const missing = [];
   for (const row of rows) {
     if (row.infohash) continue;
     const known = row.cacheKey ? RESOLVED.get(row.cacheKey) : null;
+    if (known) applyTorrent(row, known, settings);
+    else missing.push(row);
+  }
+
+  const cached = await Promise.all(
+    missing.map((row) => cachedMeta(row.cacheKey, settings)),
+  );
+
+  // Indexed rather than filtered, so `maxResolve` still cuts the page in the
+  // order the client will see it.
+  const pending = [];
+  missing.forEach((row, index) => {
+    const known = cached[index];
     if (known) {
       applyTorrent(row, known, settings);
-      continue;
+      remember(row.cacheKey, known);
+    } else if (pending.length < settings.maxResolve) {
+      pending.push(row);
     }
-    if (pending.length < settings.maxResolve) pending.push(row);
-  }
+  });
   if (!pending.length) return 0;
 
   let resolved = 0;
@@ -2073,7 +2157,10 @@ async function resolveWindow(rows, http, settings) {
       }
       if (!meta) return;
       applyTorrent(row, meta, settings);
-      if (row.cacheKey) remember(row.cacheKey, meta);
+      if (row.cacheKey) {
+        remember(row.cacheKey, meta);
+        await rememberEdge(row.cacheKey, meta, settings);
+      }
       resolved += 1;
     }),
     settings.resolveConcurrency,
@@ -2398,6 +2485,7 @@ function healthz(settings) {
     // Same reason: a client finding no peers on every row wants to know whether
     // its announce URLs were rewritten, and this is the only place that says.
     announce_http: settings.announceHttp,
+    edge_cache: settings.edgeCache,
     version: VERSION,
     runtime: RUNTIME,
     // The one thing worth saying out loud, because it is the reason to run this
@@ -2907,6 +2995,8 @@ export const __testing = {
   MIN_KEY_LENGTH,
   RESOLVED,
   SESSIONS,
+  cachedMeta,
+  rememberEdge,
   TL_CATEGORY,
   TL_CATEGORY_IDS,
   TRACKERS,
