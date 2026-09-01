@@ -247,6 +247,26 @@ function readSettings(env) {
     // across the several an edge network may run at once.
     requestGapMs: envInt(env, "BRIDGE_REQUEST_GAP_MS", 300, 0, 10000),
 
+    // Whether to advertise `torrent_url` at all.
+    //
+    // **Off, and that is not the obvious default.** TSP calls the field the
+    // `.torrent` "if the index knows one", and this one always does — it has
+    // just read the file to get the infohash. But a client reads more into it
+    // than that, and reasonably: for a public catalogue the `.torrent` carries
+    // `url-list` web seeds, so having it really does take peers off the
+    // critical path, and a client that has it stops reporting a swarm.
+    //
+    // A private tracker's file has no web seeds. Checked, on a real one: no
+    // `url-list`, no `httpseeds`, `private: 1`. The file removes the *metadata*
+    // fetch from the critical path and nothing else; every byte still comes
+    // from peers. So a client told "there is a direct source here" hides the
+    // seeder count on the one kind of row where it matters most.
+    //
+    // On, this mints the field and a start is quicker and surer, because the
+    // info dict arrives over HTTPS instead of from the swarm. Worth having if
+    // your client treats it as what it is.
+    torrentUrls: envFlag(env, "BRIDGE_TORRENT_URLS", false),
+
     // How long a `torrent_url` stays valid. The URL carries a sealed token
     // naming the file to fetch, and the seal expires so a link copied out of a
     // response cannot be replayed indefinitely. Long enough to open a search,
@@ -1117,7 +1137,7 @@ async function toTorrent(row, scrapedAt, settings = null, origin = "") {
     infohash: row.infohash,
     name: row.name,
   };
-  if (settings && origin && row.downloadUrl && settings.maxResolve) {
+  if (settings && settings.torrentUrls && origin && row.downloadUrl && settings.maxResolve) {
     const token = await seal(settings, {
       u: row.downloadUrl,
       e: Date.now() + settings.torrentfileTtlS * 1000,
@@ -2340,6 +2360,10 @@ function healthz(settings) {
             : "none",
       status: tracker.problem || "ok",
     })),
+    // Whether rows carry a `torrent_url`. Here because a client that branches
+    // on that field behaves visibly differently, and "why does every row say
+    // direct download" is answered by this line.
+    torrent_urls: settings.torrentUrls,
     version: VERSION,
     runtime: RUNTIME,
     // The one thing worth saying out loud, because it is the reason to run this

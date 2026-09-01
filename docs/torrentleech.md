@@ -174,6 +174,27 @@ an `rsskey` it validates as `[\da-fA-F]{20}` — which is where the 20-hex check
 in `read()` comes from, and where the instruction to take it from the RSS link
 on your profile comes from.
 
+**What is inside one.** Fetched through this bridge on **2026-09-01**:
+
+```
+keys at root:        announce, announce-list, info
+private flag:        1
+announce:            https://tracker.torrentleech.org/a/<PASSKEY>/announce
+announce-list:       [[ …/a/<PASSKEY>/announce, https://tracker.tleechreload.org/a/<PASSKEY>/announce ]]
+url-list (webseed):  absent
+httpseeds:           absent
+```
+
+Three things follow. `private: 1` disables DHT and peer exchange, so the
+announce list is the only way to find a peer — which is why magnetFor() uses the
+file's own trackers rather than the public five. The passkey is in every one of
+those URLs, which is why a magnet from this bridge is not a thing to paste
+anywhere. And **there are no web seeds**, which is why `BRIDGE_TORRENT_URLS`
+defaults to off: handing a client the `.torrent` removes the metadata fetch from
+the critical path and nothing else, and a client that reads the field as "no
+peers needed" will stop reporting the swarm on rows whose whole risk is the
+swarm.
+
 The RSS route is preferred because it cannot be broken by a session expiring
 mid-search, and because it keeps a `.torrent` fetch from depending on a login.
 

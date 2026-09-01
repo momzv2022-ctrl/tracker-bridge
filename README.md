@@ -198,6 +198,7 @@ Only the first two matter, and the second is really "one of these".
 | `BRIDGE_REQUEST_GAP_MS` | Smallest gap between two requests to one tracker. Default `300`. |
 | `BRIDGE_TIMEOUT_S` | How long to wait. Default `45`. |
 | `BRIDGE_BROWSE_ROWS` | Rows for a search with no words in it. Default `25`. `0` answers those instantly without asking the tracker. |
+| `BRIDGE_TORRENT_URLS` | Advertise `torrent_url` on every row. Default **off** — see below, it changes what a client believes about peers. |
 | `BRIDGE_TORRENTFILE_TTL_S` | How long a `torrent_url` stays valid. Default `3600`. |
 | `BRIDGE_USER_AGENT` | What to call itself. Defaults to a browser's, on purpose — see the file. |
 | `BRIDGE_CORS_ORIGINS` | Web pages allowed to call this, comma separated. Empty means none but the setup page. |
@@ -223,18 +224,40 @@ ignores them: `total_found` is what the tracker said it had, `unresolved` is how
 many rows on this page could not be read, and `degraded` names a tracker that
 failed while another answered.
 
-Every row also carries a **`torrent_url` pointing at this bridge**, never at the
-tracker:
+### `torrent_url`, and why it is off by default
+
+With `BRIDGE_TORRENT_URLS=1`, every row also carries a **`torrent_url` pointing
+at this bridge**, never at the tracker:
 
 ```
 https://your-bridge.example/api/v1/torrentfile/<infohash>?t=<token>
 ```
 
-That URL matters more here than anywhere else. A private torrent sets
-`private: 1`, which turns off DHT and peer exchange — so the magnet, which TSP
-requires on every row and which is still sent, cannot reach the swarm on its
-own. The `.torrent` can, because your passkey is in its announce URL. Point your
-client at `torrent_url` and it works.
+It is off unless you ask, and that is not the obvious default. TSP calls the
+field the `.torrent` "if the index knows one", and this bridge always does — it
+has just read the file to get the infohash.
+
+**But a client reads a promise into it, and reasonably.** For a public
+catalogue the `.torrent` carries `url-list` web seeds, so having it really does
+take peers off the critical path, and a client holding one stops reporting a
+swarm at all. A private tracker's file has none. Checked, on a real one:
+
+```
+private flag:        1
+announce-list:       https://tracker.torrentleech.org/a/<PASSKEY>/announce
+url-list (webseed):  absent
+httpseeds:           absent
+```
+
+So the file takes the *metadata* fetch off the critical path and nothing else.
+Every byte still comes from peers. A client told there is a direct source here
+will hide the seeder count on exactly the rows where it matters most, and will
+not warn you about a row nobody is on.
+
+Turn it on when your client treats the field as what it is — the info dict
+arrives over HTTPS rather than out of the swarm, so a start is quicker and
+surer. `/healthz` reports `torrent_urls` either way, which is the answer to
+"why does every row say direct download".
 
 The token is **sealed, not signed**: AES-GCM under your own `BRIDGE_API_KEY`, so
 what your app holds is an opaque string it cannot read. Your RSS key and your
@@ -242,6 +265,11 @@ session stay on the server, which is the point of the whole bridge. The route
 still requires your key, refuses a token it did not mint, refuses one that has
 expired, refuses one aimed at a host no configured tracker owns, and refuses a
 file whose infohash is not the one in the URL.
+
+Because the route needs the key, a client fetching that URL has to send it —
+TSP says the key goes to the index's own origin, and this URL is on it. A client
+that fetches it unauthenticated gets a 401 and, if it is well written, falls
+back to the swarm.
 
 `/healthz` needs no key and reports configuration only — whether each credential
 is set, never what it is — so it makes no request of its own. `/healthz?probe=1`

@@ -665,7 +665,7 @@ test("no answer ever carries a session, a passkey, or an RSS key", async () => {
 });
 
 test("torrent_url points back here, and its token is opaque", async () => {
-  const settings = settingsFrom();
+  const settings = settingsFrom({ BRIDGE_TORRENT_URLS: "1" });
   const answer = await search(queryOf({ q: "bunny", limit: 1 }), stubHttp(), settings, "https://b.example");
   const row = answer.body.torrents[0];
 
@@ -681,7 +681,7 @@ test("torrent_url points back here, and its token is opaque", async () => {
 });
 
 test("the file behind torrent_url can actually be fetched", async () => {
-  const settings = settingsFrom();
+  const settings = settingsFrom({ BRIDGE_TORRENT_URLS: "1" });
   const http = stubHttp();
   const answer = await search(queryOf({ q: "bunny", limit: 1 }), http, settings, "https://b.example");
   const row = answer.body.torrents[0];
@@ -696,7 +696,7 @@ test("the file behind torrent_url can actually be fetched", async () => {
 });
 
 test("the torrentfile route refuses everything it should", async () => {
-  const settings = settingsFrom();
+  const settings = settingsFrom({ BRIDGE_TORRENT_URLS: "1" });
   const http = stubHttp();
   const params = (token) => new URLSearchParams(token ? { t: token } : {});
   const hash = HASHES["1000001"];
@@ -724,6 +724,34 @@ test("the torrentfile route refuses everything it should", async () => {
   });
   const mismatch = await torrentfile(HASHES["1000004"], params(good), http, settings, {});
   assert.equal(mismatch.status, 409);
+});
+
+test("torrent_url is off unless asked for, because a client reads a promise into it", async () => {
+  // A private tracker's .torrent has no web seeds — checked on a real one: no
+  // url-list, no httpseeds, private: 1 — so it takes the *metadata* fetch off
+  // the critical path and nothing else. Every byte still comes from peers. A
+  // client that treats the field as "no peers needed" then hides the seeder
+  // count on exactly the rows where it matters most.
+  const off = await search(queryOf({ q: "bunny", limit: 2 }), stubHttp(), settingsFrom(), "https://b.example");
+  assert.ok(off.body.torrents.length);
+  for (const row of off.body.torrents) {
+    assert.equal("torrent_url" in row, false);
+    // The row is still whole: TSP wants a magnet and an infohash on every one,
+    // and those came from reading the file either way.
+    assert.match(row.infohash, /^[0-9a-f]{40}$/);
+    assert.ok(row.magnet.startsWith("magnet:?xt=urn:btih:"));
+    assert.ok(row.seeders !== undefined || row.leechers !== undefined);
+  }
+
+  const on = await search(
+    queryOf({ q: "bunny", limit: 2 }), stubHttp(), settingsFrom({ BRIDGE_TORRENT_URLS: "1" }), "https://b.example",
+  );
+  assert.ok(on.body.torrents.every((row) => row.torrent_url));
+
+  // And /healthz says which, because "why does every row say direct download"
+  // is answered by that line.
+  assert.equal(healthz(settingsFrom()).torrent_urls, false);
+  assert.equal(healthz(settingsFrom({ BRIDGE_TORRENT_URLS: "1" })).torrent_urls, true);
 });
 
 test("paging is stable, and offset walks the merged set", async () => {
