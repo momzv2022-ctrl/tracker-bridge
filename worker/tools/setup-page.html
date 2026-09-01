@@ -382,8 +382,9 @@ label .why { text-transform: none; letter-spacing: 0; font-weight: 500; color: v
           <label class="pick">
             <input type="radio" name="auth" id="auth-cookie" value="cookie" checked>
             <span><strong>Paste a session</strong><br>
-            <span class="note">Nothing here can be turned back into your password, and logging
-            out of TorrentLeech ends it. It does expire, and you paste a new one.</span></span>
+            <span class="note">Cookies from a browser you are already logged in with. Nothing in
+            them can be turned back into your password, and logging out of TorrentLeech ends
+            them. They do expire, and you paste new ones.</span></span>
           </label>
           <label class="pick">
             <input type="radio" name="auth" id="auth-login" value="login">
@@ -395,20 +396,23 @@ label .why { text-transform: none; letter-spacing: 0; font-weight: 500; color: v
 
         <div id="pane-cookie">
           <div class="field">
-            <label for="tl-uid">tluid</label>
-            <input id="tl-uid" type="text" autocomplete="off" spellcheck="false" placeholder="a number">
-          </div>
-          <div class="field">
-            <label for="tl-pass">tlpass</label>
-            <input id="tl-pass" type="text" autocomplete="off" spellcheck="false" placeholder="a long string of letters and numbers">
+            <label for="tl-cookie">Your torrentleech.org cookies</label>
+            <input id="tl-cookie" type="text" autocomplete="off" spellcheck="false"
+                   placeholder="PHPSESSID=…; tluid=…; tlpass=…">
+            <p class="hint">
+              Paste them all if it is easier. Only the ones that could be a
+              session are kept — <code>PHPSESSID</code>, <code>tluid</code>,
+              <code>tlpass</code>, <code>cf_clearance</code> — and the rest are
+              dropped here, before anything is written into the file.
+            </p>
             <div class="status" id="tl-cookie-status" role="status" aria-live="polite"></div>
           </div>
           <details class="more">
-            <summary>Where those two are</summary>
+            <summary>Where to find them</summary>
             <ol class="plain">
-              <li>Log in to TorrentLeech and tick <strong>Remember me</strong>. Without it the two below are never made.</li>
-              <li>Open your browser's developer tools, then <em>Application</em> or <em>Storage</em>, then <em>Cookies</em>, then <code>torrentleech.org</code>.</li>
-              <li>Copy the values of <code>tluid</code> and <code>tlpass</code>.</li>
+              <li>Log in to TorrentLeech in your browser, and stay logged in.</li>
+              <li>Open developer tools, then <em>Application</em> or <em>Storage</em>, then <em>Cookies</em>, then <code>https://www.torrentleech.org</code>.</li>
+              <li>Copy the names and values as <code>name=value</code>, separated by <code>;</code>.</li>
             </ol>
             <p class="note" style="margin-bottom:0">
               On a phone this is awkward, and the username and password route
@@ -616,7 +620,7 @@ label .why { text-transform: none; letter-spacing: 0; font-weight: 500; color: v
       <li>Press <em>Deploy</em> on the Cloudflare screen that opens, as normal.</li>
       <li>On your new Worker, open <em>Settings</em>, then <em>Variables and Secrets</em>, then <em>Add</em>.</li>
       <li>For a session: name it <code>TL_COOKIE</code>, choose <em>Secret</em>, and paste
-          <code id="cookie-shape">tluid=…; tlpass=…</code> as the value.</li>
+          <code id="cookie-shape">PHPSESSID=…; tluid=…; tlpass=…</code> as the value.</li>
       <li>For a login: add <code>TL_USERNAME</code> and <code>TL_PASSWORD</code> the same way,
           and <code>TL_2FA</code> if you use two-factor.</li>
       <li>Press <em>Deploy</em>, and carry on from step 4.</li>
@@ -879,8 +883,7 @@ __PLAYGROUND_LIB__
 
   /* ---- what step 1 asks for ----------------------------------------------- */
   var rssInput = byId("tl-rsskey");
-  var uidInput = byId("tl-uid");
-  var passInput = byId("tl-pass");
+  var cookieInput = byId("tl-cookie");
   var userInput = byId("tl-username");
   var passwordInput = byId("tl-password");
   var twoFaInput = byId("tl-2fa");
@@ -909,13 +912,36 @@ __PLAYGROUND_LIB__
     return cookieRadio.checked;
   }
 
+  /* The cookies that could be a session, in the order they were typed.
+
+     Which of them *is* the session is TorrentLeech's business and changes: its
+     login page sets PHPSESSID today, and tluid/tlpass are the pair a remember-me
+     login used to add. So this keeps all of them and lets the bridge find out.
+     Keep in step with TL_COOKIES_KEPT in worker.js. */
+  var KEPT = ["PHPSESSID", "tluid", "tlpass", "cf_clearance"];
+
+  function sessionCookies() {
+    var pairs = String(cookieInput.value || "").split(/[;\n]/);
+    var found = {};
+    for (var i = 0; i < pairs.length; i += 1) {
+      var at = pairs[i].indexOf("=");
+      if (at <= 0) continue;
+      var value = pairs[i].slice(at + 1).trim();
+      if (value) found[pairs[i].slice(0, at).trim().toLowerCase()] = value;
+    }
+    // Always in KEPT order, never the order they were pasted in, so the file
+    // this page writes does not depend on how somebody happened to copy.
+    var out = [];
+    for (var k = 0; k < KEPT.length; k += 1) {
+      var here = found[KEPT[k].toLowerCase()];
+      if (here) out.push(KEPT[k] + "=" + here);
+    }
+    return out;
+  }
+
   /** What to bake in, given which of the two routes is chosen. */
   function credentials() {
-    if (usingCookie()) {
-      var uid = String(uidInput.value || "").trim();
-      var pass = String(passInput.value || "").trim();
-      return { cookie: uid && pass ? "tluid=" + uid + "; tlpass=" + pass : "" };
-    }
+    if (usingCookie()) return { cookie: sessionCookies().join("; ") };
     return {
       username: String(userInput.value || "").trim(),
       password: String(passwordInput.value || "").trim(),
@@ -1008,12 +1034,17 @@ __PLAYGROUND_LIB__
     else say("tl-rsskey-status", "Looks right.");
 
     if (usingCookie()) {
-      var uid = String(uidInput.value || "").trim();
-      var pass = String(passInput.value || "").trim();
-      if (!uid && !pass) say("tl-cookie-status", "");
-      else if (!/^\d+$/.test(uid)) say("tl-cookie-status", "tluid is a number, with nothing else in it.", true);
-      else if (pass.length < 16 || /\s/.test(pass)) say("tl-cookie-status", "tlpass is a long string with no spaces.", true);
-      else say("tl-cookie-status", "Looks right.");
+      var found = sessionCookies();
+      if (!cookieInput.value.trim()) say("tl-cookie-status", "");
+      else if (!found.length) {
+        say("tl-cookie-status", "Nothing there that could be a session. Expected name=value pairs.", true);
+      } else {
+        // Naming them back is the check: a reader can see at a glance that the
+        // paste was read the way they meant it.
+        say("tl-cookie-status", "Keeping " + found.map(function (one) {
+          return one.split("=")[0];
+        }).join(", ") + ".");
+      }
     } else {
       var creds = credentials();
       if (!creds.username && !creds.password) say("tl-login-status", "");
@@ -1021,12 +1052,12 @@ __PLAYGROUND_LIB__
       else say("tl-login-status", "Looks right.");
     }
 
-    byId("cookie-shape").textContent = credentials().cookie || "tluid=…; tlpass=…";
+    byId("cookie-shape").textContent = credentials().cookie || "PHPSESSID=…; tluid=…; tlpass=…";
     rebuildLinks();
     refreshCurl();
   }
 
-  var watched = [rssInput, uidInput, passInput, userInput, passwordInput, twoFaInput];
+  var watched = [rssInput, cookieInput, userInput, passwordInput, twoFaInput];
   for (var w = 0; w < watched.length; w += 1) watched[w].addEventListener("input", checkStepOne);
   cookieRadio.addEventListener("change", checkStepOne);
   loginRadio.addEventListener("change", checkStepOne);

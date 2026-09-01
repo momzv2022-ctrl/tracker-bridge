@@ -125,7 +125,7 @@ test("the page never writes a tracker credential to storage", () => {
   const stored = [...PAGE.matchAll(/localStorage\.setItem\(([^,]+),/gu)].map((one) => one[1].trim());
   assert.deepEqual(stored, ["STORE"]);
   assert.match(PAGE, /var STORE = "tracker-bridge\.key\.v1";/);
-  for (const name of ["tl-uid", "tl-pass", "tl-username", "tl-password", "tl-2fa", "tl-rsskey"]) {
+  for (const name of ["tl-cookie", "tl-username", "tl-password", "tl-2fa", "tl-rsskey"]) {
     assert.equal(
       new RegExp(`setItem\\([^)]*${name}`, "u").test(PAGE), false,
       `the page stores ${name}`,

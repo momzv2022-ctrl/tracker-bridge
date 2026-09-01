@@ -36,7 +36,24 @@ https://rss.torrentleech.cc/
 
 ## Signing in
 
-**The form.** `login:` in the definition:
+**The form, as it actually is.** Fetched from
+`https://www.torrentleech.org/user/account/login/` on **2026-09-01**, the whole
+form is three elements:
+
+```html
+<form name="login-form" method="post" action="/user/account/login/">
+  <input type="text"     name="username" ...>
+  <input type="password" name="password" ...>
+  <button type="submit" ...>Log in</button>
+</form>
+```
+
+No hidden field, no CSRF token, and **no remember-me checkbox**. The page loads
+`https://www.google.com/recaptcha/api.js`, but neither of its two script bundles
+mentions `grecaptcha` and there is no widget in the form, so it is a leftover
+tag rather than a gate — as of that date.
+
+**The form, as the definition describes it.** `login:`:
 
 ```yaml
 path: user/account/login/
@@ -48,21 +65,35 @@ inputs:
 
 `method: form` means Cardigann fetches the page, takes *every* input in that
 form, overrides those three, and posts the lot. `tlLogin()` does the same, which
-is why `formInputs()` exists: a hidden token posted back is the difference
-between a login that works and one that silently does not.
+is why `formInputs()` exists: today it finds nothing but the two boxes, and the
+day the form grows a token that is the difference between a login that works and
+one that silently does not.
 
 `alt2FAToken` is the **Alt 2FA Token** from Site Profile, not a rolling code
 from an authenticator app. The definition's own error selector for a wrong or
 missing one matches `h2:contains("One Time Password")`, which is what
 `tlLogin()` looks for before it says anything about 2FA.
 
-**What a session is.** Two cookies, `tluid` and `tlpass`, and they are only
-issued when *Remember me* is ticked at login — which is why `formInputs()` ticks
-any checkbox whose name matches `remember` rather than dropping every checkbox.
-This is the one fact here with no primary source: it comes from community
-documentation, and it is also reported that the pair can be tied to the browser
-and address they were made at. That second part is why
-`tracker_rejected_session` says what it says.
+**What a session is: do not answer this question.** The login page sets
+`PHPSESSID`, twice, and nothing else. Community documentation describes a
+`tluid`/`tlpass` pair issued by a remember-me login, and the form has no
+remember-me control on it any more — so both may be true at different times, and
+neither is a name to depend on.
+
+The first version of this file depended on one anyway: it accepted a login only
+if the response set **both** `tluid` and `tlpass`, and so reported a working
+sign-in as `tracker_rejected_login`. `tlVerify()` replaced that. It runs a
+one-row browse with whatever cookies came back and asks whether JSON arrives.
+The site decides what a session is; this file finds out.
+
+`TL_COOKIES_KEPT` — `PHPSESSID`, `tluid`, `tlpass`, `cf_clearance` — is
+therefore an allowlist of what is *worth carrying*, not a claim about which one
+authenticates. It exists so that a cookie jar pasted out of a browser does not
+carry analytics along with it.
+
+It is also reported that the persistent pair can be tied to the browser and
+address it was made at. That is why `tracker_rejected_session` says what it says,
+and it is unverified.
 
 **Logging out ends them.** That is the revocation story for a pasted cookie, and
 it is worth knowing before you paste one.

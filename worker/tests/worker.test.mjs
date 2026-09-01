@@ -436,11 +436,62 @@ test("the session travels in a header and never in a URL", async () => {
   assert.equal(list.headers.Cookie, COOKIE);
 });
 
-test("only the two cookies that are a session are carried, and nothing else", () => {
+test("only the cookies that could be a session are carried, and always in one order", () => {
+  // A jar copied out of a browser is full of things that are not ours to
+  // forward. Which of the kept ones *is* the session is the site's business:
+  // its login page sets PHPSESSID today, and tluid/tlpass are the pair a
+  // remember-me login used to add.
   const settings = settingsFrom({
-    TL_COOKIE: "_ga=GA1.2.9; tluid=987654; consent=yes; tlpass=abcdef0123456789abcdef0123456789; cf_clearance=x",
+    TL_COOKIE: "_ga=GA1.2.9; tluid=987654; consent=yes; tlpass=abcdef0123456789abcdef0123456789; cf_clearance=cf1",
   });
-  assert.equal(settings.trackers[0].cookie, COOKIE);
+  assert.equal(settings.trackers[0].cookie, `${COOKIE}; cf_clearance=cf1`);
+
+  // Pasted in any order, out in one order, so the same jar always writes the
+  // same file.
+  const jumbled = settingsFrom({ TL_COOKIE: "tlpass=bbb; cf_clearance=cf1; PHPSESSID=aaa; tluid=1" });
+  assert.equal(jumbled.trackers[0].cookie, "PHPSESSID=aaa; tluid=1; tlpass=bbb; cf_clearance=cf1");
+});
+
+test("a login is judged by whether it works, not by which cookies it set", async () => {
+  // The first version of this file looked for cookies called tluid and tlpass.
+  // The login form has no remember-me control on it, so a good login sets
+  // PHPSESSID and neither of those — and a working sign-in was reported as a
+  // rejected one. This is that bug, held down.
+  const http = stubHttp({ login: { status: 302, cookies: ["PHPSESSID=live-session; path=/; secure"] } });
+  const settings = settingsFrom({ TL_COOKIE: "", TL_USERNAME: "someone", TL_PASSWORD: "secret" });
+
+  const answer = await search(queryOf({ q: "bunny", limit: 1 }), http, settings, "https://b.example");
+  assert.equal(answer.status, 200);
+  assert.ok(answer.body.torrents.length);
+
+  // Everything after the login carries what the login actually returned.
+  const carried = http.asked.filter((one) => one.headers && one.headers.Cookie);
+  assert.ok(carried.length);
+  for (const request of carried) assert.equal(request.headers.Cookie, "PHPSESSID=live-session");
+});
+
+test("a login that did not take says what the tracker said, and never a value", async () => {
+  const http = stubHttp({
+    // Every read comes back as the login page, so the session proves useless.
+    list: { status: 200, body: '<html><form name="login-form"></form></html>' },
+    login: {
+      status: 200,
+      body: '<html><p class="text-danger">Invalid username or password.</p></html>',
+      cookies: ["PHPSESSID=dead-session; path=/"],
+    },
+  });
+  const settings = settingsFrom({ TL_COOKIE: "", TL_USERNAME: "someone", TL_PASSWORD: "wrong" });
+
+  await assert.rejects(search(queryOf({ q: "x" }), http, settings, "https://b.example"), (thrown) => {
+    assert.equal(thrown.code, "tracker_rejected_login");
+    assert.match(thrown.detail, /HTTP 200/);
+    assert.match(thrown.detail, /Invalid username or password/);
+    // The cookie names, so a reader can see what came back — and never their
+    // values, which are the session this file exists to keep to itself.
+    assert.match(thrown.detail, /PHPSESSID/);
+    assert.equal(thrown.detail.includes("dead-session"), false);
+    return true;
+  });
 });
 
 test("a cookie pasted in any of the usual shapes still reads", () => {

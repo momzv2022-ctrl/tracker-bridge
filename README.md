@@ -78,7 +78,7 @@ Two different things, and they do two different jobs.
 | | |
 |---|---|
 | **An RSS key** | Fetches the `.torrent`. 20 hex characters, from the RSS link on your TorrentLeech profile. It does not expire. |
-| **A session** | Searches. Either a `tluid`/`tlpass` cookie pair you paste, or a username and password it can log in with. |
+| **A session** | Searches. Either the cookies you paste out of a browser you are logged in with, or a username and password it can log in with. |
 
 The RSS key cannot search and a session alone can still fetch files, so
 strictly you need one of the two — but set both. With an RSS key, fetching files
@@ -86,18 +86,28 @@ never depends on a session that may lapse mid-search.
 
 ### The session, and which of the two to give it
 
-**A cookie** is the lighter secret. Nothing in it can be turned back into your
-password, logging out of TorrentLeech ends it, and there is no login request for
-a bot filter to inspect. Log in with **Remember me** ticked — without it `tluid`
-and `tlpass` are never created — then read the two values out of your browser's
-cookie store for `torrentleech.org`.
+**Cookies** are the lighter secret. Nothing in them can be turned back into
+your password, logging out of TorrentLeech ends them, and there is no login
+request for a bot filter to inspect. Log in in your browser, then copy the
+cookies for `torrentleech.org` out of developer tools as `name=value` pairs.
+
+Paste all of them if it is easier. Only four names are ever kept —
+`PHPSESSID`, `tluid`, `tlpass`, `cf_clearance` — and the rest are dropped
+before anything is written down. **Which of them is the session is
+TorrentLeech's business and it changes**: its login page sets `PHPSESSID`
+today, and `tluid`/`tlpass` are the pair a remember-me login used to add,
+back when the form had a remember-me box on it. The bridge carries all of
+them and finds out by asking rather than by guessing which name matters.
 
 **A username and password** is the heavier secret and the one that keeps
 working. The bridge logs in by itself when the session lapses: it fetches the
-login form, posts every field on it — including the hidden ones and the remember
-box — and keeps the cookies for as long as the process lives. Set `TL_2FA` to
-your **Alt 2FA Token** (Site Profile) if your account has two-factor on; a
-one-time code from an app will not work, because there is nobody to type it.
+login form, posts every field on it — including any hidden ones, in case the
+form grows some — and then **proves the result by running a search with it**
+rather than by looking for a cookie of a particular name. If that fails you get
+the HTTP status, whatever TorrentLeech itself said, and the names of the cookies
+it handed back, so the next move is obvious. Set `TL_2FA` to your **Alt 2FA
+Token** (Site Profile) if your account has two-factor on; a one-time code from
+an app will not work, because there is nobody to type it.
 
 Set both if you like. The cookie is used while it works and the login renews it
 when it stops.
@@ -130,7 +140,7 @@ also the address the cookie was made at.
 ```sh
 curl -fsSLO https://raw.githubusercontent.com/momzv2022-ctrl/tracker-bridge/main/worker/src/worker.js
 BRIDGE_API_KEY=$(openssl rand -hex 16) \
-TL_COOKIE='tluid=123456; tlpass=your-tlpass-value' \
+TL_COOKIE='PHPSESSID=…; tluid=…; tlpass=…' \
 TL_RSSKEY=your20charrsskeyhere \
 node worker.js
 ```
@@ -145,7 +155,7 @@ systemd unit:
 ```ini
 [Service]
 Environment=BRIDGE_API_KEY=your-bridge-key
-Environment=TL_COOKIE=tluid=123456; tlpass=your-tlpass-value
+Environment=TL_COOKIE=PHPSESSID=…; tluid=…; tlpass=…
 Environment=TL_RSSKEY=your20charrsskeyhere
 ExecStart=/usr/bin/node /opt/tracker-bridge/worker.js
 Restart=always
@@ -175,7 +185,7 @@ Only the first two matter, and the second is really "one of these".
 | | |
 |---|---|
 | `BRIDGE_API_KEY` | What your app sends here, as `X-API-Key`. At least 16 characters, or the bridge refuses to serve. |
-| `TL_COOKIE` | A TorrentLeech session: `tluid=…; tlpass=…`. Anything else in the string is dropped. |
+| `TL_COOKIE` | Cookies from a logged-in browser, as `name=value` pairs. Only `PHPSESSID`, `tluid`, `tlpass` and `cf_clearance` are kept; everything else is dropped. |
 | `TL_USERNAME`, `TL_PASSWORD` | Instead of, or alongside, the cookie. Lets it log in again when the session lapses. |
 | `TL_2FA` | The Alt 2FA Token from Site Profile. Only if your account has 2FA. |
 | `TL_RSSKEY` | 20 hex characters, from your profile's RSS link. Fetches `.torrent` files without a session. |

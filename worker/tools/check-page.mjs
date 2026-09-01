@@ -46,7 +46,10 @@ const FIXED_BOUNDARY = "----WebKitFormBoundaryPageCheck00";
 const RSSKEY = "9f8e7d6c5b4a39281706";
 const TLUID = "987654";
 const TLPASS = "abcdef0123456789abcdef0123456789";
-const COOKIE = `tluid=${TLUID}; tlpass=${TLPASS}`;
+const PHPSESSID = "7gk6jpgcckfiaerhjttmq4n4ci";
+/** What the page should keep, in TL_COOKIES_KEPT order, out of the paste below. */
+const COOKIE = `PHPSESSID=${PHPSESSID}; tluid=${TLUID}; tlpass=${TLPASS}`;
+const PASTED = `_ga=GA1.2.9; tluid=${TLUID}; consent=yes; PHPSESSID=${PHPSESSID}; tlpass=${TLPASS}`;
 
 /** The seven lines the page rewrites, and what it must rewrite them to. */
 function programWith(key, until, creds) {
@@ -208,8 +211,7 @@ for (const viewport of VIEWPORTS) {
   // An RSS key that is not one is the mistake this page can catch before it
   // costs somebody a deploy and a 404 on every row two screens later.
   await page.fill("#tl-rsskey", "paste-went-wrong");
-  await page.fill("#tl-uid", TLUID);
-  await page.fill("#tl-pass", TLPASS);
+  await page.fill("#tl-cookie", PASTED);
   await page.waitForTimeout(150);
   const refused = await page.evaluate(() => ({
     status: document.getElementById("tl-rsskey-status").textContent,
@@ -228,6 +230,15 @@ for (const viewport of VIEWPORTS) {
     { timeout: 20000 },
   );
   console.log("  ✓ a whole RSS link is accepted, and the key taken out of it");
+
+  // A cookie jar copied out of a browser is full of things that are not ours to
+  // forward. The page drops them here, before anything is written into a file.
+  const kept = await page.textContent("#tl-cookie-status");
+  if (!/Keeping PHPSESSID, tluid, tlpass\./.test(kept)) {
+    fail(`the page read the cookie paste as: ${JSON.stringify(kept)}`);
+  } else {
+    console.log("  ✓ only the cookies that could be a session are kept, and it says which");
+  }
 
   // The steps are an accordion, and walking it is both how the checks below
   // reach step 5 and a test of the accordion itself.

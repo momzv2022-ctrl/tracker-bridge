@@ -1348,8 +1348,42 @@ const TL_CATEGORY_IDS = (() => {
 /** TSP's `sort` in TorrentLeech's spelling. Its default is `added`. */
 const TL_SORT = { "": "added", seeders: "seeders", size: "size", recent: "added" };
 
-/** The cookies that constitute a logged-in TorrentLeech session. */
-const TL_SESSION_COOKIES = ["tluid", "tlpass"];
+/**
+ * The cookies worth carrying to TorrentLeech, by name.
+ *
+ * An allowlist rather than "everything the browser had", because a cookie jar
+ * copied out of a browser is full of things that are not ours to forward.
+ *
+ * **Which of these is the session is the site's business, not this file's.**
+ * `PHPSESSID` is what its login page sets today; `tluid` and `tlpass` are the
+ * persistent pair a remember-me login used to add, and the login form has no
+ * remember-me control on it any more. So all three are carried and none of them
+ * is treated as proof of anything — see tlVerify, which asks instead.
+ *
+ * `cf_clearance` is the token that gets past a Cloudflare challenge. It is tied
+ * to the address and the browser it was issued to, so it is of no use to a
+ * Worker; it is here for the case where this runs on the same machine the
+ * cookie came from.
+ */
+const TL_COOKIES_KEPT = ["PHPSESSID", "tluid", "tlpass", "cf_clearance"];
+
+/**
+ * Just the ones above, out of a bigger jar, always in the order above.
+ *
+ * The order is not something a server cares about. It is here so that a cookie
+ * header this file builds does not depend on the order somebody happened to
+ * paste in, which is what makes the setup page and this file produce the same
+ * bytes from the same jar.
+ */
+function tlKeep(jar) {
+  const lowered = new Map(Object.entries(jar).map(([name, value]) => [name.toLowerCase(), value]));
+  const kept = {};
+  for (const name of TL_COOKIES_KEPT) {
+    const value = lowered.get(name.toLowerCase());
+    if (value) kept[name] = value;
+  }
+  return kept;
+}
 
 /**
  * A keyword string TorrentLeech will read as terms rather than as exclusions.
@@ -1493,6 +1527,62 @@ function tlChallenged(status, body) {
 }
 
 /**
+ * Whether these cookies can actually read a search.
+ *
+ * **This is what "logged in" means here.** The first version of this file
+ * decided by looking for cookies called `tluid` and `tlpass`, which is a guess
+ * about somebody else's site — and a wrong one: the login form has no
+ * remember-me control on it, so a good login sets `PHPSESSID` and nothing that
+ * was being looked for. It reported a working sign-in as a rejected one.
+ *
+ * Asking costs one request and cannot be wrong in that way. It deliberately
+ * does not go through tlFetch, which would call back into the login it is
+ * checking.
+ */
+async function tlVerify(cookie, http, tl, settings) {
+  const url = tlSearchUrl({ terms: "", cat: "", sort: "" }, tl);
+  await spaced(tl.host, settings.requestGapMs);
+  let response;
+  try {
+    response = await http.send(url, {
+      timeout: Math.min(settings.timeoutS, 30),
+      headers: {
+        "User-Agent": settings.userAgent,
+        Accept: "application/json, text/javascript, */*; q=0.01",
+        Referer: `${tl.host}/`,
+        Cookie: cookie,
+      },
+    });
+  } catch {
+    return { ok: false, status: 0 };
+  }
+  const body = await response.text();
+  if (tlChallenged(response.status, body)) return { ok: false, status: response.status, challenged: true };
+  if (response.status !== 200 || tlLoggedOut(response.status, body)) {
+    return { ok: false, status: response.status };
+  }
+  try {
+    const payload = JSON.parse(body);
+    return { ok: Array.isArray(payload && payload.torrentList), status: 200 };
+  } catch {
+    return { ok: false, status: 200 };
+  }
+}
+
+/**
+ * What the tracker itself said went wrong, or "".
+ *
+ * Its login page puts the reason in `p.text-danger`, which the indexer
+ * definitions use as their error selector too. Passing it through turns "that
+ * did not work" into whatever the site actually said.
+ */
+function tlComplaint(html) {
+  const found = /<p[^>]*class=["'][^"']*text-danger[^"']*["'][^>]*>([\s\S]{0,400}?)<\/p>/iu.exec(html || "");
+  if (!found) return "";
+  return htmlUnescape(found[1].replace(/<[^>]*>/gu, " ")).replace(/\s+/gu, " ").trim().slice(0, 160);
+}
+
+/**
  * Log in, and keep the cookies for as long as this isolate lives.
  *
  * Two requests: the form, for whatever hidden fields it carries and for the
@@ -1568,33 +1658,47 @@ async function tlLogin(http, tl, settings) {
     throw new BridgeError(502, "tracker_unreachable", `Could not reach ${tl.host}: ${message(thrown)}.`);
   }
 
-  Object.assign(jar, cookiesFrom(posted.cookies));
+  Object.assign(jar, tlKeep(cookiesFrom(posted.cookies)));
   const cookie = cookieHeader(jar);
-  const good = TL_SESSION_COOKIES.every((name) => jar[name]);
+  const body = await posted.text();
 
-  if (!good) {
-    const body = posted.status === 200 ? await posted.text() : "";
-    if (tlChallenged(posted.status, body)) {
-      throw new BridgeError(502, "tracker_challenged", TL_CHALLENGE);
+  if (tlChallenged(posted.status, body)) {
+    throw new BridgeError(502, "tracker_challenged", TL_CHALLENGE);
+  }
+
+  // Whether this worked is decided by trying it, not by reading cookie names.
+  if (cookie) {
+    const check = await tlVerify(cookie, http, tl, settings);
+    if (check.challenged) throw new BridgeError(502, "tracker_challenged", TL_CHALLENGE);
+    if (check.ok) {
+      SESSIONS.set(tl.id, { cookie, at: Date.now() });
+      return cookie;
     }
-    if (/One Time Password|alt2FAToken/iu.test(body)) {
-      throw new BridgeError(
-        502,
-        "tracker_rejected_login",
-        "TorrentLeech asked for a one-time password. Your account has 2FA switched on, so it " +
-          "needs the Alt 2FA Token from Site Profile in TL_2FA.",
-      );
-    }
+  }
+
+  if (/One Time Password|alt2FAToken/iu.test(body)) {
     throw new BridgeError(
       502,
       "tracker_rejected_login",
-      "TorrentLeech did not accept that username and password. Nothing was returned that looks " +
-        "like a session, so either the details are wrong or the login page has changed.",
+      "TorrentLeech asked for a one-time password. Your account has 2FA switched on, so it " +
+        "needs the Alt 2FA Token from Site Profile in TL_2FA.",
     );
   }
 
-  SESSIONS.set(tl.id, { cookie, at: Date.now() });
-  return cookie;
+  // Everything known about the failure, because the alternative is a reader
+  // changing a password that was never wrong. Cookie **names** only: their
+  // values are the session this whole file exists to keep to itself.
+  const complaint = tlComplaint(body);
+  const names = Object.keys(jar).join(", ");
+  throw new BridgeError(
+    502,
+    "tracker_rejected_login",
+    `TorrentLeech did not accept that sign-in. It answered HTTP ${posted.status}` +
+      (complaint ? `, said "${complaint}"` : "") +
+      `, and the session it handed back (${names || "no cookies at all"}) could not read a search. ` +
+      "Check the username and password first. If the account has two-factor on, TL_2FA must be " +
+      "the Alt 2FA Token from Site Profile — a rolling code from an app cannot work here.",
+  );
 }
 
 const TL_CHALLENGE =
@@ -1787,12 +1891,10 @@ const TRACKERS = {
         id: "torrentleech",
         label: "TorrentLeech",
         host,
-        // Only the two cookies that are a session. Everything else a browser
-        // had — consent banners, analytics, whatever the site sets — is not
-        // ours to carry and not ours to store.
-        cookie: cookieHeader(
-          Object.fromEntries(TL_SESSION_COOKIES.filter((name) => jar[name]).map((name) => [name, jar[name]])),
-        ),
+        // Only the cookies that could be a session. Everything else a browser
+        // had — consent banners, analytics, whatever else the site sets — is
+        // not ours to carry and not ours to store. See TL_COOKIES_KEPT.
+        cookie: cookieHeader(tlKeep(jar)),
         // 20 hex characters, from the RSS link on your profile. Anything else
         // is a paste that went wrong, and a bad key in a URL is a `.torrent`
         // route that 404s on every row.
