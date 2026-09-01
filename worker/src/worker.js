@@ -72,6 +72,15 @@ const TL_USERNAME = "";
 const TL_PASSWORD = "";
 const TL_2FA = "";
 
+// Whether to announce over http rather than https. `1` for yes, `0` for no,
+// and `BRIDGE_ANNOUNCE_HTTP` wins over it.
+//
+// Baked in rather than left to the dashboard because the people this page is
+// for do not open dashboards, and on the commonest client this is the
+// difference between a bridge that works and one that finds nobody at all. The
+// setup page asks, ticked, and says what it costs. See the setting itself.
+const ANNOUNCE_HTTP = 0;
+
 // How long this bridge should assume it is still being set up, as a millisecond
 // timestamp. The setup page writes it at the same moment it writes the values
 // above; the committed file ships with 0, which means never.
@@ -245,7 +254,14 @@ function readSettings(env) {
     // The smallest gap between two requests to the same tracker, in
     // milliseconds. Best effort: it holds within one isolate and cannot hold
     // across the several an edge network may run at once.
-    requestGapMs: envInt(env, "BRIDGE_REQUEST_GAP_MS", 300, 0, 10000),
+    //
+    // **This, not the concurrency above, is the rate limit.** The gap is
+    // enforced across every request to one tracker, so 120 ms is eight a
+    // second however many are allowed in flight — which is a burst the size of
+    // a browser loading a page, for the length of one search, rather than the
+    // steady crawl Jackett's 4.1 seconds is pacing. Raise it if you would
+    // rather be slower than that.
+    requestGapMs: envInt(env, "BRIDGE_REQUEST_GAP_MS", 120, 0, 10000),
 
     // Keep learned infohashes in Cloudflare's edge cache as well as in
     // memory, so a cold isolate starts warm.
@@ -279,7 +295,7 @@ function readSettings(env) {
     //
     // TorrentLeech's tracker serves both, and does not redirect http to https,
     // so the rewrite reaches it. Checked 2026-09-01.
-    announceHttp: envFlag(env, "BRIDGE_ANNOUNCE_HTTP", false),
+    announceHttp: envFlag(env, "BRIDGE_ANNOUNCE_HTTP", ANNOUNCE_HTTP === 1),
 
     // Whether to advertise `torrent_url` at all.
     //

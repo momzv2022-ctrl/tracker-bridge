@@ -50,6 +50,7 @@ export const BLANK_LINES = [
   ["TL_USERNAME", '""'],
   ["TL_PASSWORD", '""'],
   ["TL_2FA", '""'],
+  ["ANNOUNCE_HTTP", "0"],
   ["SETUP_UNTIL", "0"],
 ];
 

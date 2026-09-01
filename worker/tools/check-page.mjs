@@ -52,7 +52,7 @@ const COOKIE = `PHPSESSID=${PHPSESSID}; tluid=${TLUID}; tlpass=${TLPASS}`;
 const PASTED = `_ga=GA1.2.9; tluid=${TLUID}; consent=yes; PHPSESSID=${PHPSESSID}; tlpass=${TLPASS}`;
 
 /** The seven lines the page rewrites, and what it must rewrite them to. */
-function programWith(key, until, creds) {
+function programWith(key, until, creds, announceHttp = 1) {
   return WORKER
     .replace('const BRIDGE_KEY = "";', `const BRIDGE_KEY = ${JSON.stringify(key)};`)
     .replace('const TL_COOKIE = "";', `const TL_COOKIE = ${JSON.stringify(creds.cookie || "")};`)
@@ -60,6 +60,7 @@ function programWith(key, until, creds) {
     .replace('const TL_USERNAME = "";', `const TL_USERNAME = ${JSON.stringify(creds.username || "")};`)
     .replace('const TL_PASSWORD = "";', `const TL_PASSWORD = ${JSON.stringify(creds.password || "")};`)
     .replace('const TL_2FA = "";', `const TL_2FA = ${JSON.stringify(creds.twoFa || "")};`)
+    .replace("const ANNOUNCE_HTTP = 0;", `const ANNOUNCE_HTTP = ${announceHttp};`)
     .replace("const SETUP_UNTIL = 0;", `const SETUP_UNTIL = ${until};`);
 }
 
@@ -305,6 +306,20 @@ for (const viewport of VIEWPORTS) {
   if (asLogin !== loginExpected) fail("the username and password route produced a different file");
   else if (asLogin.includes(TLPASS)) fail("the login route still carried the session cookie");
   else console.log("  ✓ the username and password route bakes in exactly those three and no session");
+
+  // The box that makes the difference between a bridge that works on a phone
+  // and one that finds nobody. Ticked by default, and it has to reach the file.
+  if (!(await page.isChecked("#announce-http"))) fail("the announce-http box is not ticked by default");
+  if (!/^const ANNOUNCE_HTTP = 1;$/m.test(asLogin)) fail("the ticked box did not reach the file");
+  await page.uncheck("#announce-http");
+  await page.waitForTimeout(250);
+  await page.click("#copy-code");
+  await page.waitForTimeout(150);
+  const unticked = await page.evaluate(() => navigator.clipboard.readText());
+  if (!/^const ANNOUNCE_HTTP = 0;$/m.test(unticked)) fail("unticking the box did not reach the file");
+  else console.log("  ✓ the announce box is ticked by default and both states reach the file");
+  await page.check("#announce-http");
+  await page.waitForTimeout(250);
   await page.check("#auth-cookie");
   await page.waitForFunction(
     () => document.getElementById("open-deploy").getAttribute("aria-disabled") === null,

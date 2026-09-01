@@ -64,6 +64,13 @@ Five short steps: your TorrentLeech details, sign in to Cloudflare, press
 Deploy, open your new bridge and press Finish setup, and your URL and key are
 shown together with a button that tests them.
 
+**Everything the bridge needs is in that one press.** There is no second visit
+to a dashboard to set a variable, which matters because the one setting most
+deployments need — the announce workaround below — is the difference between a
+bridge that works on a phone and one that finds nobody, and nobody who needs
+this page is going to go and set it afterwards. Step 1 asks, in a sentence, with
+the box already ticked.
+
 Everything you type stays in your browser. Your details are written into your
 copy of the file and travel inside the deploy link, after the `#`, which
 browsers never send to a server. They are not saved in your browser, and the
@@ -201,7 +208,7 @@ Only the first two matter, and the second is really "one of these".
 | `BRIDGE_TIMEOUT_S` | How long to wait. Default `45`. |
 | `BRIDGE_BROWSE_ROWS` | Rows for a search with no words in it. Default `25`. `0` answers those instantly without asking the tracker. |
 | `BRIDGE_TORRENT_URLS` | Advertise `torrent_url` on every row. Default **off** — see below, it changes what a client believes about peers. |
-| `BRIDGE_ANNOUNCE_HTTP` | Rewrite the magnet's announce URLs from https to http. Default **off**. **Your passkey travels in the clear.** See below. |
+| `BRIDGE_ANNOUNCE_HTTP` | Rewrite the magnet's announce URLs from https to http. **The setup page asks, and ticks it.** Default off when deploying by hand. **Your passkey travels in the clear.** See below. |
 | `BRIDGE_TORRENTFILE_TTL_S` | How long a `torrent_url` stays valid. Default `3600`. |
 | `BRIDGE_USER_AGENT` | What to call itself. Defaults to a browser's, on purpose — see the file. |
 | `BRIDGE_CORS_ORIGINS` | Web pages allowed to call this, comma separated. Empty means none but the setup page. |
@@ -373,9 +380,16 @@ about the swarm is wrong; the client simply never asked.
 plain http on the same paths and does not redirect, so the announce lands. The
 price is blunt: **your passkey is in that URL, and http sends it in the clear**
 to every network between the device and the tracker. It identifies your account.
-Weigh that against a client that cannot play anything, and make the choice
-deliberately — which is why this is off by default and why `/healthz` reports
-`announce_http` either way.
+
+The setup page asks about this in step 1, with the box **ticked**, because for
+the client this exists to serve the alternative is a bridge that returns healthy
+rows and plays none of them — and a default that does not work is not a safe
+default, it is one that gets worked around less carefully. The sentence next to
+the box says what it costs, and unticking it is one tap. Deploying by hand it is
+off unless you ask, and `/healthz` reports `announce_http` either way.
+
+The real fix is in the client: a libtorrent with a CA bundle can announce over
+https and none of this is needed. Until then this is the honest trade.
 
 **The client added its own trackers.** Some clients append a list of public
 trackers to every torrent they open. On a private torrent that does not merely

@@ -442,6 +442,17 @@ label .why { text-transform: none; letter-spacing: 0; font-weight: 500; color: v
           </div>
         </div>
 
+        <h3>One more thing, and it is ticked for a reason</h3>
+        <label class="pick" style="margin-top:.5rem">
+          <input type="checkbox" id="announce-http" checked>
+          <span><strong>Help apps that cannot connect securely to the tracker</strong><br>
+          <span class="note">Most Android torrent apps cannot make a secure connection to
+          TorrentLeech's tracker, and without this they find nobody to download from — every
+          result looks alive and nothing ever starts. The cost: the key that identifies your
+          TorrentLeech account travels unencrypted between your device and the tracker, where
+          the network you are on could read it. Untick it if your app works without it.</span></span>
+        </label>
+
         <div class="wait" style="margin-top:1.3rem">
           <p class="wait-label">Two things worth knowing first</p>
           <p><strong>A session may be tied to the address it was made at.</strong></p>
@@ -837,6 +848,7 @@ __PLAYGROUND_LIB__
     TL_USERNAME: 'const TL_USERNAME = "";',
     TL_PASSWORD: 'const TL_PASSWORD = "";',
     TL_2FA: 'const TL_2FA = "";',
+    ANNOUNCE_HTTP: "const ANNOUNCE_HTTP = 0;",
     SETUP_UNTIL: "const SETUP_UNTIL = 0;"
   };
   var usable = true;
@@ -874,6 +886,7 @@ __PLAYGROUND_LIB__
       .replace(BLANKS.TL_USERNAME, "const TL_USERNAME = " + literal(creds.username || "") + ";")
       .replace(BLANKS.TL_PASSWORD, "const TL_PASSWORD = " + literal(creds.password || "") + ";")
       .replace(BLANKS.TL_2FA, "const TL_2FA = " + literal(creds.twoFa || "") + ";")
+      .replace(BLANKS.ANNOUNCE_HTTP, "const ANNOUNCE_HTTP = " + (announceHttp.checked ? 1 : 0) + ";")
       .replace(BLANKS.SETUP_UNTIL, "const SETUP_UNTIL = " + (Date.now() + 2 * 60 * 60 * 1000) + ";");
   }
 
@@ -887,6 +900,7 @@ __PLAYGROUND_LIB__
   var userInput = byId("tl-username");
   var passwordInput = byId("tl-password");
   var twoFaInput = byId("tl-2fa");
+  var announceHttp = byId("announce-http");
   var cookieRadio = byId("auth-cookie");
   var loginRadio = byId("auth-login");
   var deploy = byId("open-deploy");
@@ -1059,6 +1073,7 @@ __PLAYGROUND_LIB__
 
   var watched = [rssInput, cookieInput, userInput, passwordInput, twoFaInput];
   for (var w = 0; w < watched.length; w += 1) watched[w].addEventListener("input", checkStepOne);
+  announceHttp.addEventListener("change", checkStepOne);
   cookieRadio.addEventListener("change", checkStepOne);
   loginRadio.addEventListener("change", checkStepOne);
 

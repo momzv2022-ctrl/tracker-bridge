@@ -43,6 +43,7 @@ const BLANKS = [
   ['const TL_USERNAME = "";', "a username, for the route that logs in"],
   ['const TL_PASSWORD = "";', "and its password"],
   ['const TL_2FA = "";', "the alt 2FA token, when the account has 2FA"],
+  ["const ANNOUNCE_HTTP = 0;", "whether to announce over http, for clients that cannot do TLS"],
   ["const SETUP_UNTIL = 0;", "how long the bridge assumes setup is in progress"],
 ];
 
