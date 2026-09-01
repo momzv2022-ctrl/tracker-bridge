@@ -206,6 +206,36 @@ Only the first two matter, and the second is really "one of these".
 | `BRIDGE_ALLOW_ANONYMOUS` | Serve with no key at all. On a public URL this hands your tracker account to anyone who finds it. |
 | `BRIDGE_PORT`, `BRIDGE_HOST` | Node only. Default `8788` and `127.0.0.1`. Set `0.0.0.0` to accept from the LAN. |
 
+## Changing a setting after the setup page deployed it
+
+Worth knowing before you need it, because the error is opaque.
+
+The setup page deploys through Cloudflare's **versions** flow, which leaves the
+Worker with a latest version that is not the deployed one. Adding a variable
+then fails in two different ways depending on where you try it:
+
+- In the dashboard, **Settings → Variables and Secrets → Add** stages the row
+  and does nothing until you press **Deploy** on that card. Navigate away first
+  and the change is silently dropped — `/healthz` still reports the old value,
+  which is the quickest way to tell.
+- `wrangler secret put` refuses outright: *"the latest version of your Worker
+  isn't currently deployed"*.
+
+The command that works:
+
+```sh
+npx wrangler versions secret put BRIDGE_ANNOUNCE_HTTP --name your-worker-name
+npx wrangler versions deploy --name your-worker-name   # if it did not offer
+```
+
+**`/healthz` is the check.** It reports every setting that changes what a
+client sees — `torrent_urls`, `announce_http` — and needs no key, so
+confirming a change took is one request:
+
+```sh
+curl -s https://your-worker.workers.dev/healthz
+```
+
 ## What your app gets
 
 Four routes, one header, JSON out.
