@@ -35,7 +35,7 @@ import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, join } from "node:path";
 
-import { playgroundLink } from "./playground.js";
+import { playgroundLink, serviceBindingFor } from "./playground.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = join(HERE, "..", "..");
@@ -401,6 +401,16 @@ for (const viewport of VIEWPORTS) {
   if (inBrowser !== playgroundLink(expected, { boundary: FIXED_BOUNDARY })) {
     fail("the page's inlined copy of playground.js disagrees with the module");
   }
+  // And with a Service binding in the metadata, which is how a UTSI on the
+  // same account is reached: the same bytes from the page as from the module.
+  const boundInBrowser = await page.evaluate(
+    ([program, boundary, origin]) => playgroundLink(program, { boundary, bindings: serviceBindingFor(origin) }),
+    [expected, FIXED_BOUNDARY, UTSI_ORIGIN],
+  );
+  const boundHere = playgroundLink(expected, { boundary: FIXED_BOUNDARY, bindings: serviceBindingFor(UTSI_ORIGIN) });
+  if (boundInBrowser !== boundHere) fail("the page builds a different link once a Service binding is in it");
+  else if (boundInBrowser === inBrowser) fail("a Service binding changed nothing in the link");
+  else console.log("  ✓ a Service binding rides in the link the same way from the page and from the module");
   // The two differ because the real link has a random boundary and a random key
   // in it, and lz-string's output size depends on what it is compressing. The
   // exact byte count is pinned by the equality check above; this only catches

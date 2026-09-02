@@ -36,6 +36,7 @@ const {
   formInputs,
   handle,
   healthz,
+  httpClient,
   landingPage,
   magnetFor,
   merge,
@@ -1358,11 +1359,61 @@ test("a UTSI that is not one is refused rather than read", async () => {
   const shape = await search(query(), stubHttp({ utsi: { status: 200, body: '{"hello":"world"}' } }), settingsFrom(WITH_UTSI), "https://b.example");
   assert.match(shape.body.degraded[0], /was not a TSP search result/);
 
-  // A 404 is an origin with no such route, which is the page that made the
-  // UTSI rather than the UTSI. It says so, and names the Worker's own address.
-  const wrongPlace = await search(query(), stubHttp({ utsi: { status: 404, body: '{"error":"not_found"}' } }), settingsFrom(WITH_UTSI), "https://b.example");
-  assert.match(wrongPlace.body.degraded[0], /^UTSI: Your UTSI answered HTTP 404: there is no \/api\/v1\/search at https:\/\/utsi-abc123/);
-  assert.match(wrongPlace.body.degraded[0], /workers\.dev address its setup page showed you, not that page/);
+  // A 404 over the public URL is Cloudflare refusing a call between two of its
+  // Workers, or a URL that is not the Worker. It names both, and the fix.
+  const notFound = await search(query(), stubHttp({ utsi: { status: 404, body: "error code: 1042" } }), settingsFrom(WITH_UTSI), "https://b.example");
+  assert.match(notFound.body.degraded[0], /^UTSI: HTTP 404 from https:\/\/utsi-abc123/);
+  assert.match(notFound.body.degraded[0], /error 1042.*Service binding named UTSI on this Worker/);
+  assert.match(notFound.body.degraded[0], /UTSI_URL is not the Worker itself/);
+  // Through a binding, a 404 can only mean the binding points elsewhere.
+  const bound = readSettings({ ...ENV, BRIDGE_REQUEST_GAP_MS: "0", ...WITH_UTSI, UTSI: { fetch: async () => null } });
+  const wrongService = await search(query(), stubHttp({ utsi: { status: 404, body: "" } }), bound, "https://b.example");
+  assert.match(wrongService.body.degraded[0], /^UTSI: HTTP 404 through the UTSI binding/);
+});
+
+test("a Service binding named UTSI is how one Worker reaches another, and is used when there", async () => {
+  const binding = { fetch: async () => null };
+  const settings = readSettings({ ...ENV, BRIDGE_REQUEST_GAP_MS: "0", ...WITH_UTSI, UTSI: binding });
+  const utsi = settings.trackers.find((one) => one.id === "utsi");
+  assert.equal(utsi.fetcher, binding);
+  assert.equal(utsi.via, "binding");
+  assert.equal(healthz(settings).trackers[1].via, "binding");
+
+  // The search hands the binding to the http client, with the URL still whole
+  // and the key still in a header.
+  const http = stubHttp();
+  await search(queryOf({ q: "bunny", limit: 2 }), http, settings, "https://b.example");
+  const asked = http.asked.find((one) => one.url.startsWith(UTSI_URL));
+  assert.equal(asked.fetcher, binding);
+  assert.equal(asked.headers["X-API-Key"], UTSI_KEY);
+  const report = await probe(stubHttp(), settings);
+  assert.equal(report.trackers[1].via, "binding");
+
+  // A binding and no URL is still a whole URL to ask, and not a fault; the
+  // TorrentLeech row's file route is untouched by it.
+  const bare = readSettings({ BRIDGE_API_KEY: KEY, UTSI_API_KEY: UTSI_KEY, UTSI: binding });
+  assert.equal(bare.trackers[0].host, "https://utsi");
+  assert.equal(bare.trackers[0].problem, "");
+  // Under Node an environment variable called UTSI is a string, not a binding.
+  assert.equal(readSettings({ ...ENV, ...WITH_UTSI, UTSI: "1" }).trackers[1].via, "url");
+});
+
+test("the real http client goes through a binding when given one", async () => {
+  const seen = [];
+  const fetcher = {
+    fetch: async (url, init) => {
+      seen.push({ url, init });
+      return new Response('{"ok":true}', { status: 200, headers: { "Content-Type": "application/json" } });
+    },
+  };
+  const response = await httpClient().send("https://utsi/api/v1/search?q=x", {
+    fetcher, headers: { "X-API-Key": "k" }, timeout: 5,
+  });
+  assert.equal(response.status, 200);
+  assert.equal(await response.text(), '{"ok":true}');
+  assert.equal(seen[0].url, "https://utsi/api/v1/search?q=x");
+  assert.equal(seen[0].init.headers["X-API-Key"], "k");
+  assert.ok(seen[0].init.signal instanceof AbortSignal);
 });
 
 test("torrent_url from UTSI: sealed on its own origin, passed through from a public host, gone when off", async () => {
@@ -1442,7 +1493,7 @@ test("/healthz names UTSI without its URL or its key, and ?probe=1 asks it for r
   const health = healthz(settings);
   assert.equal(health.status, "ok");
   assert.deepEqual(health.trackers.map((one) => one.id), ["torrentleech", "utsi"]);
-  assert.deepEqual(health.trackers[1], { id: "utsi", auth: "key", torrentfile: "not needed", status: "ok" });
+  assert.deepEqual(health.trackers[1], { id: "utsi", auth: "key", torrentfile: "not needed", via: "url", status: "ok" });
   const text = JSON.stringify(health);
   assert.equal(text.includes(UTSI_KEY), false);
   assert.equal(text.includes("utsi-abc123"), false);

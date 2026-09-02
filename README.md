@@ -203,7 +203,7 @@ Only the first two matter, and the second is really "one of these".
 | `TL_HOST` | Default `https://www.torrentleech.org`. The alternates exist for when that name is blocked. |
 | `TL_FREELEECH` | Only return freeleech releases. Default off. |
 | `TL_EXCLUDE_SCENE` | Leave scene releases out. Default off. |
-| `UTSI_URL`, `UTSI_API_KEY` | A [Unified Torrent Search Interface](https://github.com/momzv2022-ctrl/unified-torrent-search-interface) of your own, and its key. Optional. With both set, every search asks it as well and its rows go into the same list. [See below.](#the-public-indexes-too-through-your-own-utsi) |
+| `UTSI_URL`, `UTSI_API_KEY` | A [Unified Torrent Search Interface](https://github.com/momzv2022-ctrl/unified-torrent-search-interface) of your own, and its key. Optional. With both set, every search asks it as well and its rows go into the same list. On Cloudflare it also needs a Service binding named `UTSI`. [See below.](#the-public-indexes-too-through-your-own-utsi) |
 | `UTSI_ROWS` | How many rows to ask it for on every search. Default `100`, ceiling `200`. Fixed rather than page-sized, so that paging over the merged list is stable. |
 | `UTSI_TIMEOUT_S` | How long to wait for it before answering without it. Default `10`. |
 | `BRIDGE_TRACKERS` | Which to switch on, comma separated: `torrentleech`, `utsi`. Empty means every configured one. |
@@ -347,6 +347,30 @@ URL and its key: the two boxes in step 1 of the setup page, or `UTSI_URL` and
 `UTSI_API_KEY` by hand.
 
 Every search then asks both, at the same time, and answers with one list.
+
+**Two Workers on one account need a Service binding.** Cloudflare refuses a
+Worker's call to another Worker's `workers.dev` address on the same account
+(its error 1042), and from the bridge that refusal looks like a 404. The way
+past it is a Service binding named `UTSI` on the bridge, pointing at your UTSI,
+and the bridge uses it whenever it is there: `/healthz` says `via: "binding"`
+rather than `via: "url"`. The setup page writes the binding into the deploy
+link; whether Cloudflare's deploy screen keeps it is not yet verified, so if
+the test in step 5 says UTSI answered 404, add it by hand: open the bridge in
+Cloudflare, then *Settings*, *Bindings*, *Add*, *Service binding*, variable
+name `UTSI`, service: your UTSI, and press *Deploy*. Deploying by hand it is
+three lines of `wrangler.toml`, with the first label of the UTSI's
+`workers.dev` address as the service:
+
+```toml
+[[services]]
+binding = "UTSI"
+service = "utsi-abc123-some-words"
+```
+
+`UTSI_URL` is still worth setting beside it: the binding is how UTSI is
+reached, and the URL is how a `torrent_url` on its origin is recognised.
+Running under Node there is no Cloudflare in between, and the URL alone is
+enough.
 
 **It is the cheap half.** A UTSI row arrives with its infohash and its magnet,
 so it costs no `.torrent` fetch and does not count against `BRIDGE_MAX_RESOLVE`.

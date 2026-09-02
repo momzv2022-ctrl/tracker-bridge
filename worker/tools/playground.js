@@ -217,16 +217,47 @@ export function playgroundLink(source, options = {}) {
   return "https://workers.cloudflare.com/playground#" + encodedWorker(source, options);
 }
 
+/**
+ * The `metadata` part: the compatibility settings above, the module's name, and
+ * — only when asked for — bindings.
+ *
+ * `bindings` is the one field a live playground link was never seen to carry.
+ * The Workers upload API documents it in exactly this shape, and the deploy
+ * screen hands the metadata part on to that API; whether it hands this field
+ * on untouched is the part still unverified — see `docs/deploy-link.md`. It is
+ * left out entirely when there is nothing to bind, so a bridge with no UTSI
+ * sends the link that was observed and nothing more.
+ */
+export function workerMetadata(options = {}) {
+  const metadata = {
+    compatibility_date: options.compatibilityDate || COMPATIBILITY_DATE,
+    compatibility_flags: options.compatibilityFlags || [...COMPATIBILITY_FLAGS],
+    main_module: "index.js",
+  };
+  if (Array.isArray(options.bindings) && options.bindings.length) metadata.bindings = options.bindings;
+  return metadata;
+}
+
+/**
+ * The Service binding that lets a bridge reach a UTSI on the same account.
+ *
+ * Cloudflare refuses a Worker's fetch of another Worker's public URL on the
+ * same account (its error 1042), and a Service binding is the door it leaves
+ * open. A Worker's name is the first label of its `workers.dev` hostname, which
+ * is the only kind of hostname a name can be read off: for anything else this
+ * is empty, and the bridge falls back to the URL.
+ */
+export function serviceBindingFor(origin) {
+  const found = /^https:\/\/([a-z0-9-]+)\.[a-z0-9-]+\.workers\.dev$/i.exec(String(origin || "").trim());
+  return found ? [{ type: "service", name: "UTSI", service: found[1] }] : [];
+}
+
 /** The fragment both links share: one ES-module Worker, compressed. */
 function encodedWorker(source, options) {
   const boundary = options.boundary || randomBoundary();
   const payload = playgroundPayload(
     [{ name: "index.js", content: source, type: "application/javascript+module" }],
-    {
-      compatibility_date: options.compatibilityDate || COMPATIBILITY_DATE,
-      compatibility_flags: options.compatibilityFlags || [...COMPATIBILITY_FLAGS],
-      main_module: "index.js",
-    },
+    workerMetadata(options),
     boundary,
   );
   return compressToEncodedURIComponent(payload);

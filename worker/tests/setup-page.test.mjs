@@ -21,7 +21,9 @@ import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-import { bothLinks, compressToEncodedURIComponent, suggestedName } from "../tools/playground.js";
+import {
+  bothLinks, compressToEncodedURIComponent, serviceBindingFor, suggestedName, workerMetadata,
+} from "../tools/playground.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = join(HERE, "..", "..");
@@ -202,4 +204,31 @@ test("the page and the artifact agree on where the other one lives", () => {
   // disagree, the test button fails in a way that looks like a broken deploy.
   assert.ok(setupPage[1].endsWith("/"), "SETUP_PAGE should end in a slash");
   assert.equal(new URL(setupPage[1]).origin, "https://momzv2022-ctrl.github.io");
+});
+
+
+test("a UTSI on workers.dev rides in the deploy link as a Service binding, and nothing else does", () => {
+  // The Worker's name is the first label of its workers.dev hostname; any
+  // other kind of hostname has no name to read, and gets no binding.
+  assert.deepEqual(serviceBindingFor("https://utsi-edjh71-black-wood-56fe.momzv2022.workers.dev"), [
+    { type: "service", name: "UTSI", service: "utsi-edjh71-black-wood-56fe" },
+  ]);
+  assert.deepEqual(serviceBindingFor("https://utsi.example.com"), []);
+  assert.deepEqual(serviceBindingFor(""), []);
+  assert.deepEqual(serviceBindingFor(undefined), []);
+
+  // In the metadata only when there is one: a bridge with no UTSI sends the
+  // link that was observed on a real playground and nothing more.
+  assert.equal("bindings" in workerMetadata({}), false);
+  assert.equal("bindings" in workerMetadata({ bindings: [] }), false);
+  assert.deepEqual(workerMetadata({ bindings: serviceBindingFor("https://a.b.workers.dev") }).bindings, [
+    { type: "service", name: "UTSI", service: "a" },
+  ]);
+  const boundary = "----WebKitFormBoundaryFixed0000";
+  const plain = bothLinks("export default {}", { boundary }).deploy;
+  const bound = bothLinks("export default {}", { boundary, bindings: serviceBindingFor("https://a.b.workers.dev") }).deploy;
+  assert.notEqual(plain, bound);
+
+  // And the page passes it, on the one line that builds the links.
+  assert.match(PAGE, /bothLinks\(programFor\(creds\), \{ bindings: serviceBindingFor\(creds\.utsiUrl\) \}\)/);
 });

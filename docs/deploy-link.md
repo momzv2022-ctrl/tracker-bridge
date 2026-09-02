@@ -116,3 +116,26 @@ In the order worth checking:
 
 `node worker/tools/playground-link.mjs worker/src/worker.js [--deploy]` prints a
 link for the committed file, which is the quickest way to look at one.
+
+
+## The one field that was never observed: `bindings`
+
+Everything above is copied from a link the playground made itself. The
+`bindings` array in the metadata part is not: no playground link was ever seen
+to carry one, because the playground has no bindings to offer. It is in the
+link anyway, only when a UTSI on `workers.dev` was given in step 1, because the
+Workers upload API documents the field in exactly this shape:
+
+```json
+{ "type": "service", "name": "UTSI", "service": "utsi-abc123-some-words" }
+```
+
+and the deploy screen hands the metadata part on to that API. **Whether it
+hands this field on untouched is unverified.** Three outcomes are possible and
+the page is written for all of them: the binding arrives and the combined
+search works in one press; the field is dropped and the test in step 5 says
+UTSI answered 404, with the dashboard steps in the message; or the screen
+refuses the payload, which would show up as a blank page, and the "Deploy
+without the sign-in" route below the steps sends a link with no binding in
+it. The first person to deploy with a UTSI will find out which, and the
+README should then say.

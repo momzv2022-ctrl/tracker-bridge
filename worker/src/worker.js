@@ -76,9 +76,8 @@ const TL_2FA = "";
 
 // Optional: a Unified Torrent Search Interface of your own, and its key. With
 // both set every search asks it too, and the public indexes land in the same
-// list. `UTSI_URL` and `UTSI_API_KEY` win over these. The key opens a search of
-// public sites rather than an account, and is held like the rest: here, sent
-// to that one origin, never to a client.
+// list. `UTSI_URL` and `UTSI_API_KEY` win over these. The key is held like the
+// rest: here, sent to that one origin, never to a client.
 const UTSI_URL = "";
 const UTSI_KEY = "";
 
@@ -1227,8 +1226,7 @@ async function toTorrent(row, scrapedAt, settings = null, origin = "") {
   if (row.descriptionUrl) torrent.description_url = row.descriptionUrl;
   if (row.sources.length) torrent.sources = [...new Set(row.sources)].sort();
   // Two more the contract does not name, for a client holding private and
-  // public rows in one list: `private` is the file's own flag, which keeps a
-  // client off the public trackers and the DHT; `indexer` is who had it.
+  // public rows in one list: the file's own flag, and who had it.
   if (row.private) torrent.private = true;
   if (row.indexer) torrent.indexer = row.indexer;
   return torrent;
@@ -1591,11 +1589,9 @@ function tlRow(entry, tl) {
     // candidate until resolveWindow() has read its `.torrent`.
     infohash: null,
     downloadUrl: tlFileUrl(tl, id, filename),
-    // Never a public copy of the file: toTorrent serves this one from here.
     torrentUrl: null,
     trackers: null,
     magnet: null,
-    // The file's own word, once applyTorrent() has read it.
     private: null,
     sizeBytes: positiveOrNone(entry.size),
     files: positiveOrNone(entry.numfiles),
@@ -2022,8 +2018,7 @@ async function tlProbe(http, tl, settings) {
 //
 // The sibling project: a Worker of your own that asks the public indexes and
 // answers in TSP, so its rows arrive with an infohash and a magnet and cost no
-// `.torrent` fetch. Asked in parallel with TorrentLeech; UTSI_TIMEOUT_S caps
-// how much slower than the tracker's own list request it may be.
+// `.torrent` fetch. Asked in parallel with TorrentLeech; UTSI_TIMEOUT_S caps it.
 
 /** Whether *url* is on *origin*. */
 function sameOrigin(url, origin) {
@@ -2083,9 +2078,8 @@ function utsiSearchUrl(query, utsi, settings) {
   // With the filters, so what comes back is the best *qualifying* rows.
   const wanted = { cat: query.cat, year: query.year, res: query.res, min_seeders: query.minSeeders, sort: query.sort };
   for (const [name, value] of Object.entries(wanted)) if (value) params[name] = String(value);
-  // **A fixed number of rows, never the page asked for.** Paging happens here,
-  // over the merged set, and `count` and the order are the same answer on
-  // every page only if UTSI is asked the same question every time.
+  // **A fixed number of rows, never the page asked for**: paging happens here,
+  // and the order is the same on every page only if UTSI is asked the same.
   params.limit = String(query.terms ? utsi.rows : Math.min(settings.browseRows, utsi.rows));
   return `${utsi.host}/api/v1/search?${urlencode(params)}`;
 }
@@ -2102,6 +2096,7 @@ async function utsiSearch(query, http, utsi, settings) {
   try {
     response = await http.send(utsiSearchUrl(query, utsi, settings), {
       timeout: Math.min(utsi.timeoutS, settings.timeoutS),
+      fetcher: utsi.fetcher,
       headers: {
         "User-Agent": `tracker-bridge/${VERSION}`,
         Accept: "application/json",
@@ -2123,15 +2118,15 @@ async function utsiSearch(query, http, utsi, settings) {
     );
   }
   if (response.status !== 200) {
-    // A 404 is an origin with no such route, which is almost always the page
-    // that made the UTSI rather than the UTSI: a Worker always has this route.
-    throw new BridgeError(
-      502,
-      "utsi_error",
-      response.status === 404
-        ? `Your UTSI answered HTTP 404: there is no /api/v1/search at ${utsi.host}. UTSI_URL should be the Worker itself, the workers.dev address its setup page showed you, not that page.`
-        : `Your UTSI answered HTTP ${response.status}.`,
-    );
+    // Over the public URL, a 404 is usually Cloudflare refusing the call
+    // between two of its own Workers, which looks like a 404 from here.
+    let detail = `Your UTSI answered HTTP ${response.status}.`;
+    if (response.status === 404) {
+      detail = utsi.via === "url"
+        ? `HTTP 404 from ${utsi.host}: Cloudflare refusing a call between two Workers on one account (error 1042), which a Service binding named UTSI on this Worker fixes; or UTSI_URL is not the Worker itself.`
+        : "HTTP 404 through the UTSI binding: it does not point at a UTSI.";
+    }
+    throw new BridgeError(502, "utsi_error", detail);
   }
 
   let payload = null;
@@ -2159,8 +2154,8 @@ async function utsiSearch(query, http, utsi, settings) {
 /** A live answer for /healthz?probe=1: does it answer, and does the key fit? */
 async function utsiProbe(http, utsi, settings) {
   const report = {
-    tracker: utsi.id, label: utsi.label, host: utsi.host, reachable: false, authenticated: false,
-    auth: utsi.auth, torrentfile: utsi.torrentfile,
+    tracker: utsi.id, label: utsi.label, host: utsi.host, via: utsi.via, reachable: false,
+    authenticated: false, auth: utsi.auth, torrentfile: utsi.torrentfile,
   };
   if (utsi.problem) return { ...report, detail: "UTSI_URL is not an https:// address." };
   try {
@@ -2248,14 +2243,19 @@ const TRACKERS = {
     read(env) {
       const given = envText(env, "UTSI_URL") || String(UTSI_URL || "").trim();
       const apiKey = envText(env, "UTSI_API_KEY") || String(UTSI_KEY || "").trim();
-      if (!given && !apiKey) return null;
-      // An origin and nothing more: a pasted URL tends to end in a slash.
-      const host = envOrigin(env, "UTSI_URL", given);
+      // Cloudflare refuses a Worker's call to another Worker on the same account
+      // (its error 1042); a Service binding named UTSI is the door it leaves.
+      const fetcher = env && env.UTSI && typeof env.UTSI.fetch === "function" ? env.UTSI : null;
+      if (!given && !apiKey && !fetcher) return null;
+      // An origin and nothing more; a binding ignores it, but the URL must be whole.
+      const host = envOrigin(env, "UTSI_URL", given) || (fetcher && !given ? "https://utsi" : "");
       return {
         id: "utsi",
         label: "UTSI",
         host,
         apiKey,
+        fetcher,
+        via: fetcher ? "binding" : "url",
         // Rows to ask for on every search: fixed, not the page size, so that
         // paging over the merged set is stable. See utsiSearchUrl.
         rows: envInt(env, "UTSI_ROWS", 100, 1, MAX_LIMIT),
@@ -2702,6 +2702,7 @@ function healthz(settings) {
       // the credential itself.
       auth: tracker.auth,
       torrentfile: tracker.torrentfile,
+      ...(tracker.via ? { via: tracker.via } : {}),
       status: tracker.problem || "ok",
     })),
     // Whether rows carry a `torrent_url`. Here because a client that branches
@@ -3016,6 +3017,7 @@ async function torrentfile(wanted, params, http, settings, cors) {
     await spaced(tracker.host, settings.requestGapMs);
     const response = await http.send(request.url, {
       timeout: Math.min(settings.timeoutS, 25),
+      fetcher: tracker.fetcher || null,
       headers: {
         "User-Agent": settings.userAgent,
         Accept: "application/x-bittorrent, application/octet-stream, */*",
@@ -3116,14 +3118,16 @@ function render(answer) {
  */
 function httpClient() {
   return {
-    async send(url, { method = "GET", headers = null, body = null, timeout = 30, redirect = "follow" } = {}) {
-      const response = await fetch(url, {
+    async send(url, { method = "GET", headers = null, body = null, timeout = 30, redirect = "follow", fetcher = null } = {}) {
+      const init = {
         method,
         headers: headers || {},
         body,
         redirect,
         signal: AbortSignal.timeout(Math.round(timeout * 1000)),
-      });
+      };
+      // A Service binding is another Worker's front door, with no internet between.
+      const response = fetcher ? await fetcher.fetch(url, init) : await fetch(url, init);
       return {
         status: response.status,
         location: response.headers.get("location") || "",
@@ -3240,6 +3244,7 @@ export const __testing = {
   formInputs,
   handle,
   healthz,
+  httpClient,
   landingPage,
   magnetFor,
   merge,
