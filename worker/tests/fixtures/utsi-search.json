@@ -1,0 +1,82 @@
+{
+  "_comment": "What a Unified Torrent Search Interface answers, in the shape its docs/api.md describes. Built rather than captured: two infohashes are placeholders the test fills in, one so that a public row collides with a TorrentLeech row, one so that a sealed torrent_url can be fetched and checked. The rest of the rows exercise each thing utsiRow() reads.",
+  "query": "big buck bunny",
+  "count": 214,
+  "limit": 100,
+  "offset": 0,
+  "took_ms": 1830,
+  "torrents": [
+    {
+      "magnet": "magnet:?xt=urn:btih:__BUNNY__&dn=Big%20Buck%20Bunny%202008%201080p%20BluRay%20x264-GROUP&tr=udp%3A%2F%2Ftracker.opentrackr.org%3A1337%2Fannounce&tr=udp%3A%2F%2Fopen.stealth.si%3A80%2Fannounce&tr=udp%3A%2F%2Ftracker.torrent.eu.org%3A451%2Fannounce&tr=udp%3A%2F%2Fexodus.desync.com%3A6969%2Fannounce&tr=udp%3A%2F%2Fopen.demonii.com%3A1337%2Fannounce",
+      "infohash": "__BUNNY__",
+      "name": "Big Buck Bunny 2008 1080p BluRay x264-GROUP",
+      "size_bytes": 8589934592,
+      "files": 3,
+      "category": "video",
+      "seeders": 1500,
+      "leechers": 120,
+      "year": "2008",
+      "resolution": "1080p",
+      "codec": "x264",
+      "source": "bluray",
+      "first_seen": "2020-06-01T00:00:00Z",
+      "scraped_at": "2026-09-02T05:00:00Z",
+      "description_url": "https://public.example/torrent/bbb-1080p",
+      "sources": ["piratebay", "knaben"]
+    },
+    {
+      "magnet": "magnet:?xt=urn:btih:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1&dn=Sintel%202010%201080p%20WEB-DL%20x264-PUBLIC&tr=udp%3A%2F%2Ftracker.opentrackr.org%3A1337%2Fannounce&tr=udp%3A%2F%2Fopen.stealth.si%3A80%2Fannounce&tr=udp%3A%2F%2Ftracker.torrent.eu.org%3A451%2Fannounce&tr=udp%3A%2F%2Fexodus.desync.com%3A6969%2Fannounce&tr=udp%3A%2F%2Fopen.demonii.com%3A1337%2Fannounce",
+      "infohash": "A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1A1",
+      "name": "Sintel 2010 1080p WEB-DL x264-PUBLIC",
+      "size_bytes": 1610612736,
+      "files": 2,
+      "category": "video",
+      "seeders": 3200,
+      "leechers": 40,
+      "year": "2010",
+      "resolution": "1080p",
+      "codec": "x264",
+      "source": "web-dl",
+      "first_seen": "2019-02-11T10:00:00Z",
+      "scraped_at": "2026-09-02T05:00:00Z",
+      "torrent_url": "https://cdn.public.example/sintel-1080p.torrent",
+      "description_url": "https://public.example/torrent/sintel-1080p",
+      "sources": ["yts"]
+    },
+    {
+      "magnet": "magnet:?xt=urn:btih:__UBUNTU__&dn=Ubuntu%2024.04%20Desktop%20amd64",
+      "infohash": "__UBUNTU__",
+      "name": "Ubuntu 24.04 Desktop amd64",
+      "size_bytes": 6114656256,
+      "files": 1,
+      "category": "software",
+      "seeders": 900,
+      "leechers": 15,
+      "first_seen": "2024-04-25T00:00:00Z",
+      "scraped_at": "2026-09-02T05:00:00Z",
+      "torrent_url": "__UTSI__/api/v1/torrentfile/__UBUNTU__?t=sealed-by-utsi",
+      "description_url": "https://public.example/torrent/ubuntu-2404",
+      "sources": ["torrentscsv"]
+    },
+    {
+      "magnet": "magnet:?xt=urn:btih:XKCD2WKWSYQMH7ZNKRWN2TVTYQOQMBAK&dn=Cosmos%20Laundromat%202015%202160p",
+      "name": "Cosmos Laundromat 2015 2160p",
+      "seeders": 0,
+      "leechers": 0,
+      "size_bytes": 0,
+      "files": 0,
+      "scraped_at": "2026-09-02T05:00:00Z",
+      "sources": []
+    },
+    {
+      "magnet": "",
+      "infohash": "",
+      "name": "A Row With Nothing To Identify It",
+      "seeders": 5,
+      "sources": ["eztvx"]
+    },
+    "not even an object"
+  ],
+  "engines": ["knaben", "piratebay", "torrentscsv", "yts"],
+  "partial": false
+}

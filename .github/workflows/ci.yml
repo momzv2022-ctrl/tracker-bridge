@@ -60,11 +60,12 @@ jobs:
           TL_COOKIE='tluid=42; tlpass=SECRETSESSIONVALUE01' \
           TL_RSSKEY=abcdef0123456789abcd \
           TL_USERNAME=ci-user TL_PASSWORD=SECRETPASSWORD \
+          UTSI_URL=https://utsi-secretname.example.workers.dev UTSI_API_KEY=SECRETUTSIKEY01 \
           BRIDGE_PORT=8789 node worker/src/worker.js &
           for i in $(seq 1 20); do curl -fsS http://127.0.0.1:8789/healthz >/dev/null 2>&1 && break; sleep 0.5; done
           for route in /healthz / /robots.txt /nowhere; do
             body=$(curl -s "http://127.0.0.1:8789$route")
-            for secret in SECRETSESSIONVALUE01 abcdef0123456789abcd SECRETPASSWORD ci-user; do
+            for secret in SECRETSESSIONVALUE01 abcdef0123456789abcd SECRETPASSWORD ci-user SECRETUTSIKEY01 utsi-secretname; do
               case "$body" in *"$secret"*) echo "$route leaked $secret"; exit 1;; esac
             done
           done

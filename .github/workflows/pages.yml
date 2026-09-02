@@ -57,7 +57,7 @@ jobs:
 
       - name: The artifact must ship with no credentials in it
         # build.mjs refuses too, and a test proves it refuses. This is the same
-        # rule said out loud a third time, because of the seven lines below two
+        # rule said out loud a third time, because of the lines below two
         # are a live session and a password for a real website: one of them
         # committed by accident would be one person's tracker account handed to
         # everybody who ever opened the page.
@@ -68,6 +68,8 @@ jobs:
           grep -qx 'const TL_USERNAME = "";' worker/src/worker.js
           grep -qx 'const TL_PASSWORD = "";' worker/src/worker.js
           grep -qx 'const TL_2FA = "";' worker/src/worker.js
+          grep -qx 'const UTSI_URL = "";' worker/src/worker.js
+          grep -qx 'const UTSI_KEY = "";' worker/src/worker.js
           grep -qx 'const SETUP_UNTIL = 0;' worker/src/worker.js
 
       - name: Tests, before anything is published

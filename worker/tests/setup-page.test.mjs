@@ -7,8 +7,8 @@
  * the page's claims about itself, and the joins between the three files that
  * have to agree — the artifact, the build, and the page.
  *
- * The joins matter more than they look. The page rewrites seven exact lines of
- * a 2,700-line file by string match. If any of them is renamed and only two of
+ * The joins matter more than they look. The page rewrites ten exact lines of
+ * a 3,000-line file by string match. If any of them is renamed and only two of
  * the three files hear about it, the page deploys a Worker with a credential
  * silently missing, and the first sign of it is a search that returns nothing.
  */
@@ -31,7 +31,7 @@ const BUILD = readFileSync(join(REPO, "worker", "tools", "build.mjs"), "utf8");
 const PLAYGROUND = readFileSync(join(REPO, "worker", "tools", "playground.js"), "utf8");
 
 /**
- * The seven lines the whole scheme rests on.
+ * The ten lines the whole scheme rests on.
  *
  * Named here, and then each of the three files is checked against this list
  * rather than against each other, so a rename fails in one obvious place.
@@ -43,6 +43,8 @@ const BLANKS = [
   ['const TL_USERNAME = "";', "a username, for the route that logs in"],
   ['const TL_PASSWORD = "";', "and its password"],
   ['const TL_2FA = "";', "the alt 2FA token, when the account has 2FA"],
+  ['const UTSI_URL = "";', "a UTSI of your own, for the public indexes"],
+  ['const UTSI_KEY = "";', "and its key"],
   ["const ANNOUNCE_HTTP = 0;", "whether to announce over http, for clients that cannot do TLS"],
   ["const SETUP_UNTIL = 0;", "how long the bridge assumes setup is in progress"],
 ];
@@ -126,7 +128,7 @@ test("the page never writes a tracker credential to storage", () => {
   const stored = [...PAGE.matchAll(/localStorage\.setItem\(([^,]+),/gu)].map((one) => one[1].trim());
   assert.deepEqual(stored, ["STORE"]);
   assert.match(PAGE, /var STORE = "tracker-bridge\.key\.v1";/);
-  for (const name of ["tl-cookie", "tl-username", "tl-password", "tl-2fa", "tl-rsskey"]) {
+  for (const name of ["tl-cookie", "tl-username", "tl-password", "tl-2fa", "tl-rsskey", "utsi-url", "utsi-key"]) {
     assert.equal(
       new RegExp(`setItem\\([^)]*${name}`, "u").test(PAGE), false,
       `the page stores ${name}`,

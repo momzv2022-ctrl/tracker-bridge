@@ -442,6 +442,28 @@ label .why { text-transform: none; letter-spacing: 0; font-weight: 500; color: v
           </div>
         </div>
 
+        <h3>Search the public indexes too <span class="why">optional</span></h3>
+        <p class="note" style="margin-top:.3rem">
+          If you have a
+          <a href="https://momzv2022-ctrl.github.io/unified-torrent-search-interface/" rel="noopener">Unified Torrent Search Interface</a>
+          of your own, paste its URL and its key and every search asks it as
+          well. Your app then gets one list with TorrentLeech and the public
+          indexes in it, from the one URL and key it already has, and the
+          public rows cost nothing extra. Leave both empty to search
+          TorrentLeech alone.
+        </p>
+        <div class="field">
+          <label for="utsi-url">Your UTSI URL</label>
+          <input id="utsi-url" type="text" inputmode="url" autocomplete="off" spellcheck="false"
+                 placeholder="https://utsi-abc123.your-name.workers.dev">
+        </div>
+        <div class="field">
+          <label for="utsi-key">Its key <span class="why">the one its setup page showed you</span></label>
+          <input id="utsi-key" type="text" autocomplete="off" spellcheck="false"
+                 placeholder="leave empty to search TorrentLeech alone">
+          <div class="status" id="utsi-status" role="status" aria-live="polite"></div>
+        </div>
+
         <h3>One more thing, and it is ticked for a reason</h3>
         <label class="pick" style="margin-top:.5rem">
           <input type="checkbox" id="announce-http" checked>
@@ -634,6 +656,8 @@ label .why { text-transform: none; letter-spacing: 0; font-weight: 500; color: v
           <code id="cookie-shape">PHPSESSID=…; tluid=…; tlpass=…</code> as the value.</li>
       <li>For a login: add <code>TL_USERNAME</code> and <code>TL_PASSWORD</code> the same way,
           and <code>TL_2FA</code> if you use two-factor.</li>
+      <li>For the public indexes too: add <code>UTSI_URL</code> as a variable and
+          <code>UTSI_API_KEY</code> as a secret.</li>
       <li>Press <em>Deploy</em>, and carry on from step 4.</li>
     </ol>
   </details>
@@ -793,8 +817,9 @@ __PLAYGROUND_LIB__
 
      **Only the search key.** Nothing about TorrentLeech is ever written here,
      not for a moment: a session opens the account, a password opens more than
-     that, and a browser is a poor place to leave either. Reloading mid-setup
-     therefore means typing them again, which is the right trade.
+     that, and a browser is a poor place to leave either. Nor is the UTSI key.
+     Reloading mid-setup therefore means typing them again, which is the right
+     trade.
 
      A stored key is reused on later visits, so the key on screen is always the
      key inside the file this page is offering, and a reload can never show a
@@ -848,6 +873,8 @@ __PLAYGROUND_LIB__
     TL_USERNAME: 'const TL_USERNAME = "";',
     TL_PASSWORD: 'const TL_PASSWORD = "";',
     TL_2FA: 'const TL_2FA = "";',
+    UTSI_URL: 'const UTSI_URL = "";',
+    UTSI_KEY: 'const UTSI_KEY = "";',
     ANNOUNCE_HTTP: "const ANNOUNCE_HTTP = 0;",
     SETUP_UNTIL: "const SETUP_UNTIL = 0;"
   };
@@ -886,6 +913,8 @@ __PLAYGROUND_LIB__
       .replace(BLANKS.TL_USERNAME, "const TL_USERNAME = " + literal(creds.username || "") + ";")
       .replace(BLANKS.TL_PASSWORD, "const TL_PASSWORD = " + literal(creds.password || "") + ";")
       .replace(BLANKS.TL_2FA, "const TL_2FA = " + literal(creds.twoFa || "") + ";")
+      .replace(BLANKS.UTSI_URL, "const UTSI_URL = " + literal(creds.utsiUrl || "") + ";")
+      .replace(BLANKS.UTSI_KEY, "const UTSI_KEY = " + literal(creds.utsiKey || "") + ";")
       .replace(BLANKS.ANNOUNCE_HTTP, "const ANNOUNCE_HTTP = " + (announceHttp.checked ? 1 : 0) + ";")
       .replace(BLANKS.SETUP_UNTIL, "const SETUP_UNTIL = " + (Date.now() + 2 * 60 * 60 * 1000) + ";");
   }
@@ -900,6 +929,8 @@ __PLAYGROUND_LIB__
   var userInput = byId("tl-username");
   var passwordInput = byId("tl-password");
   var twoFaInput = byId("tl-2fa");
+  var utsiUrlInput = byId("utsi-url");
+  var utsiKeyInput = byId("utsi-key");
   var announceHttp = byId("announce-http");
   var cookieRadio = byId("auth-cookie");
   var loginRadio = byId("auth-login");
@@ -924,6 +955,31 @@ __PLAYGROUND_LIB__
 
   function usingCookie() {
     return cookieRadio.checked;
+  }
+
+  /* The optional pair: a UTSI of your own, and its key.
+
+     The origin and nothing else, because the routes are the protocol's own
+     and a pasted URL tends to arrive with a path or a slash on the end. A
+     scheme is added when it was left off: everything Cloudflare hands out is
+     https. Keep in step with envOrigin() in worker.js, which does the same to
+     the environment variable. */
+  function utsiUrl() {
+    var typed = String(utsiUrlInput.value || "").trim().replace(/\/+$/, "");
+    if (!typed) return "";
+    if (!/^https?:\/\//i.test(typed)) typed = "https://" + typed;
+    try { return new URL(typed).origin; } catch (error) { return ""; }
+  }
+
+  /** Why the pair cannot be used, or "". Both or neither: one alone is a mistake. */
+  function utsiProblem() {
+    var typedUrl = String(utsiUrlInput.value || "").trim();
+    var typedKey = String(utsiKeyInput.value || "").trim();
+    if (!typedUrl && !typedKey) return "";
+    if (typedUrl && !utsiUrl()) return "That UTSI URL does not look like one.";
+    if (!typedUrl) return "Your UTSI needs its URL as well as its key.";
+    if (!typedKey) return "Your UTSI needs its key as well as its URL.";
+    return "";
   }
 
   /* The cookies that could be a session, in the order they were typed.
@@ -955,12 +1011,19 @@ __PLAYGROUND_LIB__
 
   /** What to bake in, given which of the two routes is chosen. */
   function credentials() {
-    if (usingCookie()) return { cookie: sessionCookies().join("; ") };
-    return {
-      username: String(userInput.value || "").trim(),
-      password: String(passwordInput.value || "").trim(),
-      twoFa: String(twoFaInput.value || "").trim()
-    };
+    var creds = usingCookie()
+      ? { cookie: sessionCookies().join("; ") }
+      : {
+          username: String(userInput.value || "").trim(),
+          password: String(passwordInput.value || "").trim(),
+          twoFa: String(twoFaInput.value || "").trim()
+        };
+    // The optional pair travels with either route, and only as a pair.
+    if (utsiUrl() && !utsiProblem()) {
+      creds.utsiUrl = utsiUrl();
+      creds.utsiKey = String(utsiKeyInput.value || "").trim();
+    }
+    return creds;
   }
 
   var linksReady = false;
@@ -981,6 +1044,7 @@ __PLAYGROUND_LIB__
         : "fill in step 1 first";
     }
     if (!credentialsGiven()) return "fill in step 1 first";
+    if (utsiProblem()) return utsiProblem() + " See step 1.";
     return "";
   }
 
@@ -1066,12 +1130,17 @@ __PLAYGROUND_LIB__
       else say("tl-login-status", "Looks right.");
     }
 
+    var utsiTrouble = utsiProblem();
+    if (!utsiUrlInput.value.trim() && !utsiKeyInput.value.trim()) say("utsi-status", "");
+    else if (utsiTrouble) say("utsi-status", utsiTrouble, true);
+    else say("utsi-status", "Looks right. The public indexes will be in the same list.");
+
     byId("cookie-shape").textContent = credentials().cookie || "PHPSESSID=…; tluid=…; tlpass=…";
     rebuildLinks();
     refreshCurl();
   }
 
-  var watched = [rssInput, cookieInput, userInput, passwordInput, twoFaInput];
+  var watched = [rssInput, cookieInput, userInput, passwordInput, twoFaInput, utsiUrlInput, utsiKeyInput];
   for (var w = 0; w < watched.length; w += 1) watched[w].addEventListener("input", checkStepOne);
   announceHttp.addEventListener("change", checkStepOne);
   cookieRadio.addEventListener("change", checkStepOne);

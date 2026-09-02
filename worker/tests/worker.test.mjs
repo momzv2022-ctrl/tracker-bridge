@@ -4,7 +4,8 @@
  * Nothing here touches the network. TorrentLeech is a table: a captured
  * `torrentList` and a stub `http` client that hands it back, mints a `.torrent`
  * for any row asked for, and records every request — the URL, the headers, and
- * the cookie that carried the session.
+ * the cookie that carried the session. UTSI is a second table, in the shape
+ * its own API document describes, behind the same stub.
  *
  * Two things are worth pinning above all others, and both are here. The URL
  * that goes out, because it is a path a tracker either understands or does not.
@@ -38,6 +39,7 @@ const {
   landingPage,
   magnetFor,
   merge,
+  normalizeInfohash,
   parseCookie,
   parseName,
   probe,
@@ -59,6 +61,7 @@ const {
 const HERE = dirname(fileURLToPath(import.meta.url));
 const LIST = JSON.parse(readFileSync(join(HERE, "fixtures", "torrentleech-list.json"), "utf8"));
 const GOLDEN_PATH = join(HERE, "golden", "search.json");
+const COMBINED_PATH = join(HERE, "golden", "combined.json");
 
 const KEY = "abcd-efgh-jkmn-pqrs-tuvw-xyz2";
 const COOKIE = "tluid=987654; tlpass=abcdef0123456789abcdef0123456789";
@@ -121,6 +124,34 @@ const HASHES = Object.fromEntries(
   LIST.torrentList.map((entry) => [entry.fid, torrentFor(releaseName(entry)).infohash]),
 );
 
+// --- a UTSI, as a table -------------------------------------------------------
+
+const UTSI_URL = "https://utsi-abc123.someone.workers.dev";
+const UTSI_KEY = "utsi-key-0123456789abcdef0123456789";
+/** The pair as somebody would paste it: with the trailing slash, on purpose. */
+const WITH_UTSI = { UTSI_URL: `${UTSI_URL}/`, UTSI_API_KEY: UTSI_KEY };
+
+const UTSI_RAW = readFileSync(join(HERE, "fixtures", "utsi-search.json"), "utf8");
+/** A public `.torrent`, for the one row whose file is served through the bridge. */
+const UBUNTU = torrentFor("Ubuntu 24.04 Desktop amd64", { isPrivate: 0 });
+
+/**
+ * What UTSI answers, with its two placeholders filled in: one row shares an
+ * infohash with a TorrentLeech row, which is the cross-tracker merge, and one
+ * carries a `torrent_url` on UTSI's own origin, which is the sealed route.
+ */
+function utsiAnswer({ collide = true } = {}) {
+  const answer = JSON.parse(
+    UTSI_RAW.replace(/__BUNNY__/g, HASHES["1000001"])
+      .replace(/__UBUNTU__/g, UBUNTU.infohash)
+      .replace(/__UTSI__/g, UTSI_URL),
+  );
+  if (!collide) {
+    answer.torrents = answer.torrents.filter((row) => !(row && row.infohash === HASHES["1000001"]));
+  }
+  return answer;
+}
+
 // --- TorrentLeech, as a table -------------------------------------------------
 
 /**
@@ -146,6 +177,20 @@ function stubHttp(options = {}) {
     async send(url, request = {}) {
       asked.push({ url, ...request });
       if (options.throws) throw new TypeError("fetch failed");
+
+      // UTSI. *options.utsi* replaces its search answer, or throws; the
+      // default is the table. *options.utsiFile* replaces its `.torrent`.
+      if (url.startsWith(UTSI_URL)) {
+        if (url.includes("/api/v1/torrentfile/")) {
+          const made = typeof options.utsiFile === "function" ? options.utsiFile(url, request) : options.utsiFile;
+          if (made === null) return reply(404, "");
+          return made ? reply(made.status ?? 200, made.body) : reply(200, UBUNTU.bytes);
+        }
+        const answer = typeof options.utsi === "function" ? options.utsi(url, request) : options.utsi;
+        if (answer === undefined) return reply(200, utsiAnswer());
+        if (answer && answer.status !== undefined) return reply(answer.status, answer.body, answer);
+        return reply(200, answer);
+      }
 
       if (url.includes("/user/account/login")) {
         const answer = typeof options.login === "function" ? options.login(request, asked) : options.login;
@@ -1158,4 +1203,348 @@ test("merge keeps the earliest sighting and every contributing source", () => {
   assert.equal(merged.seeders, 9);
   assert.equal(merged.firstSeen, "2023-01-02T00:00:00Z");
   assert.deepEqual(merged.sources, ["A", "B"]);
+});
+
+// ══ your own UTSI: the public indexes, in the same list ══════════════════════
+
+test("UTSI is asked in TSP, with the key in a header and the filters along for the ride", async () => {
+  const http = stubHttp();
+  await search(
+    queryOf({ q: "big.buck.bunny", cat: "video", year: "2008", res: "1080p", minSeeders: 5, sort: "size", limit: 10, offset: 20 }),
+    http, settingsFrom(WITH_UTSI), "https://b.example",
+  );
+  const asked = http.asked.find((one) => one.url.startsWith(UTSI_URL));
+  assert.ok(asked, "UTSI was not asked");
+  const url = new URL(asked.url);
+  // The trailing slash on the setting did not double up the path.
+  assert.equal(url.pathname, "/api/v1/search");
+  assert.equal(url.searchParams.get("q"), "big buck bunny");
+  assert.equal(url.searchParams.get("cat"), "video");
+  assert.equal(url.searchParams.get("year"), "2008");
+  assert.equal(url.searchParams.get("res"), "1080p");
+  assert.equal(url.searchParams.get("min_seeders"), "5");
+  assert.equal(url.searchParams.get("sort"), "size");
+  // A fixed number of rows whatever page was asked for, and never an offset:
+  // paging happens here, over the merged set. See utsiSearchUrl.
+  assert.equal(url.searchParams.get("limit"), "100");
+  assert.equal(url.searchParams.get("offset"), null);
+  // The key travels in a header, and TorrentLeech's session does not travel.
+  assert.equal(asked.headers["X-API-Key"], UTSI_KEY);
+  assert.equal(asked.headers.Cookie, undefined);
+  assert.equal(asked.url.includes(UTSI_KEY), false);
+
+  const fewer = stubHttp();
+  await search(queryOf({ q: "x" }), fewer, settingsFrom({ ...WITH_UTSI, UTSI_ROWS: "30" }), "https://b.example");
+  const again = fewer.asked.find((one) => one.url.startsWith(UTSI_URL));
+  assert.equal(new URL(again.url).searchParams.get("limit"), "30");
+});
+
+test("both are asked at once, and a public row costs no request at all", async () => {
+  const http = stubHttp();
+  const answer = await search(
+    queryOf({ q: "sintel", limit: 50 }), http, settingsFrom({ ...WITH_UTSI, BRIDGE_MAX_RESOLVE: "50" }), "https://b.example",
+  );
+  const rows = answer.body.torrents;
+
+  const sintel = rows.find((row) => row.name === "Sintel 2010 1080p WEB-DL x264-PUBLIC");
+  assert.ok(sintel, "the public row is missing");
+  // Its magnet is the one UTSI made: the same function, the same public five.
+  assert.equal(sintel.magnet, magnetFor(sintel.infohash, sintel.name));
+  assert.equal(sintel.infohash, "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1");
+  assert.equal(sintel.private, undefined);
+  assert.equal(sintel.indexer, "UTSI");
+  assert.deepEqual(sintel.sources, ["UTSI/yts"]);
+  assert.equal(sintel.seeders, 3200);
+  assert.equal(sintel.year, "2010");
+  assert.equal(sintel.description_url, "https://public.example/torrent/sintel-1080p");
+
+  // A base32 magnet with no infohash field is still a row, its noughts are
+  // absences, and it has no engine to name. A row with nothing is not a row.
+  const cosmos = rows.find((row) => row.name === "Cosmos Laundromat 2015 2160p");
+  assert.equal(cosmos.infohash, normalizeInfohash("XKCD2WKWSYQMH7ZNKRWN2TVTYQOQMBAK"));
+  assert.equal(cosmos.size_bytes, undefined);
+  assert.equal(cosmos.files, undefined);
+  assert.deepEqual(cosmos.sources, ["UTSI"]);
+  assert.equal(rows.some((row) => row.name === "A Row With Nothing To Identify It"), false);
+
+  // Every file that was read was TorrentLeech's. Nothing was fetched for a
+  // public row, and nothing counted against BRIDGE_MAX_RESOLVE for one.
+  const files = http.asked.filter((one) => one.url.includes("/download/"));
+  assert.ok(files.length);
+  assert.ok(files.every((one) => one.url.startsWith(HOST)));
+  assert.equal(answer.body.unresolved, undefined);
+
+  // And a TorrentLeech row says what it is.
+  const tl = rows.find((row) => row.indexer === "TorrentLeech");
+  assert.equal(tl.private, true);
+  assert.ok(tl.magnet.includes(encodeURIComponent(ANNOUNCE)));
+
+  assert.deepEqual(answer.body.engines, [
+    "TorrentLeech", "UTSI", "UTSI/knaben", "UTSI/piratebay", "UTSI/torrentscsv", "UTSI/yts",
+  ]);
+  // What each side said it had, added up.
+  assert.equal(answer.body.total_found, LIST.numFound + 214);
+});
+
+test("the same release on both sides is one row, and the private copy says where the swarm is", async () => {
+  const answer = await search(
+    queryOf({ q: "bunny", limit: 50 }), stubHttp(), settingsFrom({ ...WITH_UTSI, BRIDGE_MAX_RESOLVE: "50" }), "https://b.example",
+  );
+  const bunnies = answer.body.torrents.filter((row) => row.infohash === HASHES["1000001"]);
+  assert.equal(bunnies.length, 1);
+  const [bunny] = bunnies;
+
+  // One infohash is one info dict, `private` flag included: the swarm is the
+  // tracker's, and the magnet announces there and nowhere else.
+  assert.equal(bunny.private, true);
+  assert.equal(bunny.indexer, "TorrentLeech");
+  assert.ok(bunny.magnet.includes(encodeURIComponent(ANNOUNCE)));
+  assert.equal((bunny.magnet.match(/&tr=/g) || []).length, 1);
+  // The best of each field, and everyone who had it.
+  assert.equal(bunny.seeders, 1500);
+  assert.equal(bunny.name, "Big Buck Bunny 2008 1080p BluRay x264-GROUP [REPOST]");
+  assert.deepEqual(bunny.sources, ["TorrentLeech", "UTSI/knaben", "UTSI/piratebay"]);
+  assert.equal(bunny.first_seen, "2020-06-01T00:00:00Z");
+});
+
+test("one side failing degrades the answer rather than failing it", async () => {
+  const query = () => queryOf({ q: "bunny", limit: 5 });
+
+  const utsiDown = await search(query(), stubHttp({ utsi: { status: 500, body: "boom" } }), settingsFrom(WITH_UTSI), "https://b.example");
+  assert.equal(utsiDown.status, 200);
+  assert.ok(utsiDown.body.torrents.length);
+  assert.ok(utsiDown.body.torrents.every((row) => row.indexer === "TorrentLeech"));
+  assert.deepEqual(utsiDown.body.degraded, ["UTSI: Your UTSI answered HTTP 500."]);
+
+  const tlDown = await search(query(), stubHttp({ list: { status: 500, body: "" } }), settingsFrom(WITH_UTSI), "https://b.example");
+  assert.equal(tlDown.status, 200);
+  assert.ok(tlDown.body.torrents.length);
+  assert.ok(tlDown.body.torrents.every((row) => row.indexer === "UTSI"));
+  assert.match(tlDown.body.degraded[0], /^TorrentLeech: /);
+
+  const gone = stubHttp({ utsi: () => { throw new TypeError("fetch failed"); } });
+  const unreachable = await search(query(), gone, settingsFrom(WITH_UTSI), "https://b.example");
+  assert.equal(unreachable.status, 200);
+  assert.match(unreachable.body.degraded[0], /^UTSI: Could not reach https:\/\/utsi-abc123/);
+
+  // Both down is the error, and it is a server fault.
+  await assert.rejects(
+    search(query(), stubHttp({ list: { status: 500, body: "" }, utsi: { status: 500, body: "" } }), settingsFrom(WITH_UTSI), "https://b.example"),
+    (thrown) => thrown instanceof BridgeError && thrown.status === 502,
+  );
+});
+
+test("a UTSI key that does not fit is named after the setting, and never shown", async () => {
+  const query = () => queryOf({ q: "bunny", limit: 2 });
+
+  const wrong = await search(query(), stubHttp({ utsi: { status: 403, body: '{"error":"invalid_api_key"}' } }), settingsFrom(WITH_UTSI), "https://b.example");
+  assert.match(wrong.body.degraded[0], /^UTSI: Your UTSI rejected the key: UTSI_API_KEY /);
+  assert.equal(JSON.stringify(wrong.body).includes(UTSI_KEY), false);
+
+  const unset = await search(query(), stubHttp({ utsi: { status: 401, body: "{}" } }), settingsFrom({ UTSI_URL }), "https://b.example");
+  assert.match(unset.body.degraded[0], /UTSI_API_KEY is not set/);
+
+  const lost = await search(query(), stubHttp({ utsi: { status: 401, body: "{}" } }), settingsFrom(WITH_UTSI), "https://b.example");
+  assert.match(lost.body.degraded[0], /saw none/);
+
+  const throttled = await search(query(), stubHttp({ utsi: { status: 429, body: "" } }), settingsFrom(WITH_UTSI), "https://b.example");
+  assert.match(throttled.body.degraded[0], /HTTP 429/);
+});
+
+test("a UTSI that is not one is refused rather than read", async () => {
+  const query = () => queryOf({ q: "bunny", limit: 2 });
+  const page = await search(query(), stubHttp({ utsi: { status: 200, body: "<html>a page</html>" } }), settingsFrom(WITH_UTSI), "https://b.example");
+  assert.match(page.body.degraded[0], /was not a TSP search result/);
+  const shape = await search(query(), stubHttp({ utsi: { status: 200, body: '{"hello":"world"}' } }), settingsFrom(WITH_UTSI), "https://b.example");
+  assert.match(shape.body.degraded[0], /was not a TSP search result/);
+});
+
+test("torrent_url from UTSI: sealed on its own origin, passed through from a public host, gone when off", async () => {
+  const settings = settingsFrom({ ...WITH_UTSI, BRIDGE_TORRENT_URLS: "1", BRIDGE_MAX_RESOLVE: "50" });
+  const on = await search(queryOf({ q: "x", limit: 50 }), stubHttp(), settings, "https://b.example");
+
+  // On UTSI's origin the file needs UTSI's key, which the client does not
+  // have, so it is served from here, sealed, the way a TorrentLeech file is.
+  const ubuntu = on.body.torrents.find((row) => row.name === "Ubuntu 24.04 Desktop amd64");
+  assert.match(ubuntu.torrent_url, new RegExp(`^https://b\\.example/api/v1/torrentfile/${UBUNTU.infohash}\\?t=`));
+  const token = new URL(ubuntu.torrent_url).searchParams.get("t");
+  assert.equal(token.includes(UTSI_KEY), false);
+  assert.equal(token.includes("utsi-abc123"), false);
+  assert.equal((await unseal(settings, token)).u, `${UTSI_URL}/api/v1/torrentfile/${UBUNTU.infohash}?t=sealed-by-utsi`);
+
+  // On a public host it needs nothing, and goes through as it came.
+  const sintel = on.body.torrents.find((row) => row.name === "Sintel 2010 1080p WEB-DL x264-PUBLIC");
+  assert.equal(sintel.torrent_url, "https://cdn.public.example/sintel-1080p.torrent");
+
+  // A TorrentLeech row's is still sealed, and still points here.
+  const tl = on.body.torrents.find((row) => row.indexer === "TorrentLeech");
+  assert.match(tl.torrent_url, /^https:\/\/b\.example\/api\/v1\/torrentfile\//);
+
+  const off = await search(queryOf({ q: "x", limit: 50 }), stubHttp(), settingsFrom(WITH_UTSI), "https://b.example");
+  assert.ok(off.body.torrents.every((row) => row.torrent_url === undefined));
+});
+
+test("the file behind a sealed UTSI torrent_url is fetched with its key, and checked", async () => {
+  const settings = settingsFrom({ ...WITH_UTSI, BRIDGE_TORRENT_URLS: "1", BRIDGE_MAX_RESOLVE: "50" });
+  const found = await search(queryOf({ q: "x", limit: 50 }), stubHttp(), settings, "https://b.example");
+  const ubuntu = found.body.torrents.find((row) => row.name === "Ubuntu 24.04 Desktop amd64");
+
+  const http = stubHttp();
+  const answer = await handle("GET", ubuntu.torrent_url, headersOf({ "X-API-Key": KEY }), http, settings);
+  assert.equal(answer.status, 200);
+  assert.equal(answer.headers["Content-Type"], "application/x-bittorrent");
+  assert.deepEqual(answer.bytes, UBUNTU.bytes);
+  const fetched = http.asked.find((one) => one.url.includes("/api/v1/torrentfile/"));
+  assert.equal(fetched.url, `${UTSI_URL}/api/v1/torrentfile/${UBUNTU.infohash}?t=sealed-by-utsi`);
+  assert.equal(fetched.headers["X-API-Key"], UTSI_KEY);
+  assert.equal(fetched.headers.Cookie, undefined);
+
+  // A file that is not the one asked for is refused.
+  const other = stubHttp({ utsiFile: { body: torrentFor("Something Else").bytes } });
+  const mismatch = await handle("GET", ubuntu.torrent_url, headersOf({ "X-API-Key": KEY }), other, settings);
+  assert.equal(mismatch.status, 409);
+
+  // UTSI refusing its key is named as that, not as a session.
+  const refused = stubHttp({ utsiFile: { status: 403, body: "" } });
+  const rejected = await handle("GET", ubuntu.torrent_url, headersOf({ "X-API-Key": KEY }), refused, settings);
+  assert.equal(rejected.status, 502);
+  assert.equal(rejected.body.detail, "UTSI refused this bridge's key.");
+});
+
+test("paging with UTSI in the mix is stable, and count is the same on every page", async () => {
+  const settings = settingsFrom({ ...WITH_UTSI, BRIDGE_MAX_RESOLVE: "50" });
+  // Without the row that collides, so that the page-local merge does not make
+  // page one and the whole set disagree by design. See search().
+  const options = { utsi: utsiAnswer({ collide: false }) };
+  const all = await search(queryOf({ q: "bunny", limit: 50 }), stubHttp(options), settings, "https://b.example");
+  const first = await search(queryOf({ q: "bunny", limit: 3 }), stubHttp(options), settings, "https://b.example");
+  const second = await search(queryOf({ q: "bunny", limit: 3, offset: 3 }), stubHttp(options), settings, "https://b.example");
+
+  assert.deepEqual(
+    [...first.body.torrents, ...second.body.torrents].map((row) => row.infohash),
+    all.body.torrents.slice(0, 6).map((row) => row.infohash),
+  );
+  assert.equal(first.body.count, all.body.count);
+  assert.equal(second.body.count, all.body.count);
+  // Both kinds of row are in those six, in one order.
+  const kinds = new Set([...first.body.torrents, ...second.body.torrents].map((row) => row.indexer));
+  assert.deepEqual([...kinds].sort(), ["TorrentLeech", "UTSI"]);
+});
+
+test("/healthz names UTSI without its URL or its key, and ?probe=1 asks it for real", async () => {
+  const settings = settingsFrom(WITH_UTSI);
+  const health = healthz(settings);
+  assert.equal(health.status, "ok");
+  assert.deepEqual(health.trackers.map((one) => one.id), ["torrentleech", "utsi"]);
+  assert.deepEqual(health.trackers[1], { id: "utsi", auth: "key", torrentfile: "not needed", status: "ok" });
+  const text = JSON.stringify(health);
+  assert.equal(text.includes(UTSI_KEY), false);
+  assert.equal(text.includes("utsi-abc123"), false);
+
+  const http = stubHttp();
+  const report = await probe(http, settings);
+  assert.equal(report.status, "ok");
+  const utsi = report.trackers.find((one) => one.tracker === "utsi");
+  assert.equal(utsi.reachable, true);
+  assert.equal(utsi.authenticated, true);
+  assert.equal(utsi.host, UTSI_URL);
+  assert.deepEqual(utsi.engines, ["knaben", "piratebay", "torrentscsv", "yts"]);
+  assert.equal(utsi.matches, 214);
+  const asked = http.asked.find((one) => one.url.startsWith(UTSI_URL));
+  assert.equal(new URL(asked.url).searchParams.get("limit"), "1");
+  assert.equal(asked.headers["X-API-Key"], UTSI_KEY);
+  assert.equal(JSON.stringify(report).includes(UTSI_KEY), false);
+
+  // A wrong key shows up here, and the whole bridge is "degraded", not "ok".
+  const rejected = await probe(stubHttp({ utsi: { status: 403, body: "{}" } }), settings);
+  assert.equal(rejected.status, "degraded");
+  const bad = rejected.trackers.find((one) => one.tracker === "utsi");
+  assert.equal(bad.reachable, true);
+  assert.equal(bad.authenticated, false);
+  assert.equal(bad.code, "utsi_rejected_key");
+});
+
+test("a UTSI URL that is not one is a fault it names, and TorrentLeech still searches", async () => {
+  const settings = readSettings({
+    ...ENV, BRIDGE_REQUEST_GAP_MS: "0", UTSI_URL: "utsi-abc123.someone.workers.dev", UTSI_API_KEY: UTSI_KEY,
+  });
+  const utsi = settings.trackers.find((one) => one.id === "utsi");
+  assert.equal(utsi.problem, "bad_url");
+  assert.equal(healthz(settings).trackers[1].status, "bad_url");
+
+  const http = stubHttp();
+  const answer = await search(queryOf({ q: "bunny", limit: 2 }), http, settings, "https://b.example");
+  assert.equal(answer.status, 200);
+  assert.equal(http.asked.some((one) => one.url.includes("utsi-abc123")), false);
+
+  const report = await probe(stubHttp(), settings);
+  assert.equal(report.trackers[1].detail, "UTSI_URL is not an https:// address.");
+});
+
+test("UTSI alone is a bridge with no tracker session at all, and never touches TorrentLeech", async () => {
+  const settings = readSettings({ BRIDGE_API_KEY: KEY, BRIDGE_REQUEST_GAP_MS: "0", ...WITH_UTSI });
+  assert.deepEqual(settings.trackers.map((one) => one.id), ["utsi"]);
+  assert.equal(healthz(settings).status, "ok");
+
+  const http = stubHttp();
+  const answer = await search(queryOf({ q: "sintel", limit: 50 }), http, settings, "https://b.example");
+  assert.ok(answer.body.torrents.length);
+  assert.ok(http.asked.every((one) => one.url.startsWith(UTSI_URL)));
+  assert.ok(answer.body.torrents.every((row) => row.indexer === "UTSI"));
+
+  // And the other way round: BRIDGE_TRACKERS keeps a configured UTSI out.
+  const only = settingsFrom({ ...WITH_UTSI, BRIDGE_TRACKERS: "torrentleech" });
+  assert.deepEqual(only.trackers.map((one) => one.id), ["torrentleech"]);
+});
+
+test("a browse asks UTSI for the browse rows, and nothing when browsing is off", async () => {
+  const some = stubHttp();
+  await search(queryOf({ q: "" }), some, settingsFrom({ ...WITH_UTSI, BRIDGE_BROWSE_ROWS: "2" }), "https://b.example");
+  const asked = some.asked.find((one) => one.url.startsWith(UTSI_URL));
+  assert.equal(new URL(asked.url).searchParams.get("q"), "");
+  assert.equal(new URL(asked.url).searchParams.get("limit"), "2");
+
+  const none = stubHttp();
+  await search(queryOf({ q: "" }), none, settingsFrom({ ...WITH_UTSI, BRIDGE_BROWSE_ROWS: "0" }), "https://b.example");
+  assert.equal(none.asked.length, 0);
+});
+
+test("a partial answer from UTSI is passed along as one", async () => {
+  const cut = utsiAnswer();
+  cut.partial = true;
+  const partial = await search(queryOf({ q: "bunny", limit: 5 }), stubHttp({ utsi: cut }), settingsFrom(WITH_UTSI), "https://b.example");
+  assert.equal(partial.body.partial, true);
+  const whole = await search(queryOf({ q: "bunny", limit: 5 }), stubHttp(), settingsFrom(WITH_UTSI), "https://b.example");
+  assert.equal(whole.body.partial, undefined);
+});
+
+test("no answer with UTSI in it carries its key, its URL, or a session", async () => {
+  const settings = settingsFrom({ ...WITH_UTSI, BRIDGE_TORRENT_URLS: "1", BRIDGE_MAX_RESOLVE: "50" });
+  const answer = await search(queryOf({ q: "bunny", limit: 50 }), stubHttp(), settings, "https://b.example");
+  const text = JSON.stringify(answer.body);
+  assert.equal(text.includes(UTSI_KEY), false);
+  assert.equal(text.includes("utsi-abc123"), false);
+  assert.equal(text.includes("tlpass"), false);
+  assert.equal(text.includes(RSSKEY), false);
+});
+
+// ══ the frozen combined answer ═════════════════════════════════════════════
+
+test("the frozen combined answer has not moved", async () => {
+  const settings = settingsFrom({ ...WITH_UTSI, BRIDGE_MAX_RESOLVE: "50", BRIDGE_TORRENT_URLS: "1" });
+  const answer = await search(queryOf({ q: "bunny", limit: 50 }), stubHttp(), settings, "https://bridge.example");
+
+  const frozen = JSON.parse(JSON.stringify(answer.body));
+  delete frozen.took_ms;
+  for (const row of frozen.torrents) delete row.scraped_at;
+  for (const row of frozen.torrents) {
+    if (row.torrent_url) row.torrent_url = row.torrent_url.replace(/\?t=.*$/, "?t=<sealed>");
+  }
+  const text = JSON.stringify(frozen, null, 2) + "\n";
+
+  if (process.env.UPDATE_GOLDEN === "1") {
+    writeFileSync(COMBINED_PATH, text);
+    return;
+  }
+  assert.equal(text, readFileSync(COMBINED_PATH, "utf8"));
 });

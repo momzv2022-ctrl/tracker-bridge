@@ -16,7 +16,9 @@
  *   7. an RSS key that is not one is refused before it can waste a deploy;
  *   8. both ways of signing in produce a program with exactly the right lines
  *      spliced in, byte for byte;
- *   9. the copy button yields that same program.
+ *   9. the copy button yields that same program;
+ *  10. a UTSI URL and key reach the file as its origin and its key, and one
+ *      without the other is refused.
  *
  * And one that is not about layout at all: **the page must make no network
  * request.** It is a page that asks for a live session on somebody's tracker
@@ -50,8 +52,10 @@ const PHPSESSID = "7gk6jpgcckfiaerhjttmq4n4ci";
 /** What the page should keep, in TL_COOKIES_KEPT order, out of the paste below. */
 const COOKIE = `PHPSESSID=${PHPSESSID}; tluid=${TLUID}; tlpass=${TLPASS}`;
 const PASTED = `_ga=GA1.2.9; tluid=${TLUID}; consent=yes; PHPSESSID=${PHPSESSID}; tlpass=${TLPASS}`;
+const UTSI_ORIGIN = "https://utsi-abc123.someone.workers.dev";
+const UTSI_KEY = "utsi-key-0123456789abcdef0123456789";
 
-/** The seven lines the page rewrites, and what it must rewrite them to. */
+/** The ten lines the page rewrites, and what it must rewrite them to. */
 function programWith(key, until, creds, announceHttp = 1) {
   return WORKER
     .replace('const BRIDGE_KEY = "";', `const BRIDGE_KEY = ${JSON.stringify(key)};`)
@@ -60,6 +64,8 @@ function programWith(key, until, creds, announceHttp = 1) {
     .replace('const TL_USERNAME = "";', `const TL_USERNAME = ${JSON.stringify(creds.username || "")};`)
     .replace('const TL_PASSWORD = "";', `const TL_PASSWORD = ${JSON.stringify(creds.password || "")};`)
     .replace('const TL_2FA = "";', `const TL_2FA = ${JSON.stringify(creds.twoFa || "")};`)
+    .replace('const UTSI_URL = "";', `const UTSI_URL = ${JSON.stringify(creds.utsiUrl || "")};`)
+    .replace('const UTSI_KEY = "";', `const UTSI_KEY = ${JSON.stringify(creds.utsiKey || "")};`)
     .replace("const ANNOUNCE_HTTP = 0;", `const ANNOUNCE_HTTP = ${announceHttp};`)
     .replace("const SETUP_UNTIL = 0;", `const SETUP_UNTIL = ${until};`);
 }
@@ -325,6 +331,40 @@ for (const viewport of VIEWPORTS) {
     () => document.getElementById("open-deploy").getAttribute("aria-disabled") === null,
     { timeout: 20000 },
   );
+
+  // The optional pair. One without the other is refused, with a reason, and
+  // both reach the file as the origin — the pasted slash and path gone — and
+  // the key.
+  await page.fill("#utsi-url", `${UTSI_ORIGIN}/healthz/`);
+  await page.waitForTimeout(250);
+  const half = await page.evaluate(() => ({
+    disabled: document.getElementById("open-deploy").getAttribute("aria-disabled"),
+    status: document.getElementById("utsi-status").textContent,
+  }));
+  if (half.disabled !== "true" || !/needs its key/.test(half.status)) {
+    fail(`a UTSI URL without its key was accepted: ${JSON.stringify(half)}`);
+  }
+  await page.fill("#utsi-key", UTSI_KEY);
+  await page.waitForFunction(
+    () => document.getElementById("open-deploy").getAttribute("aria-disabled") === null,
+    { timeout: 20000 },
+  );
+  await page.click("#copy-code");
+  await page.waitForTimeout(150);
+  const withUtsi = await page.evaluate(() => navigator.clipboard.readText());
+  const utsiStamp = /^const SETUP_UNTIL = (\d+);$/m.exec(withUtsi);
+  const utsiExpected = programWith(layout.key.text, utsiStamp ? utsiStamp[1] : 0, {
+    cookie: COOKIE, utsiUrl: UTSI_ORIGIN, utsiKey: UTSI_KEY,
+  });
+  if (withUtsi !== utsiExpected) fail("the UTSI pair did not reach the file as its origin and its key");
+  else console.log("  ✓ a UTSI URL and key reach the file as its origin and its key; one alone is refused");
+  await page.fill("#utsi-url", "");
+  await page.fill("#utsi-key", "");
+  await page.waitForFunction(
+    () => document.getElementById("open-deploy").getAttribute("aria-disabled") === null,
+    { timeout: 20000 },
+  );
+
   // And back to the end, where the URL box is.
   await page.evaluate(() => { document.querySelector("#step-5 details").open = true; });
 

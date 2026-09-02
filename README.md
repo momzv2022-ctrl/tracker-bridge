@@ -16,8 +16,11 @@ on every row.
 
 One file, no dependencies, and short enough to read in a sitting.
 
-**Today it speaks one tracker: TorrentLeech.** Adding another is one entry in
-`TRACKERS` and nothing else — [see below](#adding-another-tracker).
+**It speaks one tracker, TorrentLeech, and one sibling:** a
+[Unified Torrent Search Interface](https://github.com/momzv2022-ctrl/unified-torrent-search-interface)
+of your own, which brings the public indexes into the same list — [see
+below](#the-public-indexes-too-through-your-own-utsi). Adding another tracker
+is one entry in `TRACKERS` and nothing else.
 
 **Why not point the app straight at the tracker?** Two reasons. Your session
 opens your whole account: your profile, your passkey, your ratio, your invites.
@@ -62,7 +65,8 @@ for you. Free, no card, nothing installed, and it works on a phone.
 
 Five short steps: your TorrentLeech details, sign in to Cloudflare, press
 Deploy, open your new bridge and press Finish setup, and your URL and key are
-shown together with a button that tests them.
+shown together with a button that tests them. Step 1 also has two optional
+boxes for a UTSI of your own; fill them in and the public indexes come along.
 
 **Everything the bridge needs is in that one press.** There is no second visit
 to a dashboard to set a variable, which matters because the one setting most
@@ -199,7 +203,10 @@ Only the first two matter, and the second is really "one of these".
 | `TL_HOST` | Default `https://www.torrentleech.org`. The alternates exist for when that name is blocked. |
 | `TL_FREELEECH` | Only return freeleech releases. Default off. |
 | `TL_EXCLUDE_SCENE` | Leave scene releases out. Default off. |
-| `BRIDGE_TRACKERS` | Which trackers to switch on, comma separated. Empty means every configured one. |
+| `UTSI_URL`, `UTSI_API_KEY` | A [Unified Torrent Search Interface](https://github.com/momzv2022-ctrl/unified-torrent-search-interface) of your own, and its key. Optional. With both set, every search asks it as well and its rows go into the same list. [See below.](#the-public-indexes-too-through-your-own-utsi) |
+| `UTSI_ROWS` | How many rows to ask it for on every search. Default `100`, ceiling `200`. Fixed rather than page-sized, so that paging over the merged list is stable. |
+| `UTSI_TIMEOUT_S` | How long to wait for it before answering without it. Default `10`. |
+| `BRIDGE_TRACKERS` | Which to switch on, comma separated: `torrentleech`, `utsi`. Empty means every configured one. |
 | `BRIDGE_MAX_RESOLVE` | Most rows per page whose `.torrent` is read. Default `20`. **This is the length of your results.** `0` empties every answer. |
 | `BRIDGE_RESOLVE_CONCURRENCY` | How many of those may be in flight at once. Default `3`. |
 | `BRIDGE_REQUEST_GAP_MS` | Smallest gap between two requests to one tracker. Default `300`. Lower it and searches get faster; see below. |
@@ -259,10 +266,13 @@ curl -H "X-API-Key: YOUR-BRIDGE-KEY" \
 `magnet`, an `infohash`, a name, a size, seeder and leecher counts, and whatever
 the release name gives up: year, resolution, codec, source, season, episode.
 
-Three fields are not in the contract, and a client that does not know them
-ignores them: `total_found` is what the tracker said it had, `unresolved` is how
-many rows on this page could not be read, and `degraded` names a tracker that
-failed while another answered.
+Some fields are not in the contract, and a client that does not know them
+ignores them: `total_found` is what the trackers said they had, `unresolved` is
+how many rows on this page could not be read, `degraded` names a tracker that
+failed while another answered, and `partial` is passed along from a UTSI that
+stopped waiting for its slowest engines. Two more are for a client holding
+private and public rows in one list: `private` is the file's own flag, and
+`indexer` is who had the row — `TorrentLeech` or `UTSI`.
 
 ### `torrent_url`, and why it is off by default
 
@@ -313,8 +323,8 @@ back to the swarm.
 
 `/healthz` needs no key and reports configuration only — whether each credential
 is set, never what it is — so it makes no request of its own. `/healthz?probe=1`
-needs the key and asks the tracker: whether it answers, whether it still accepts
-your session, and how much it says it has.
+needs the key and asks each tracker: whether it answers, whether it still accepts
+your session or your key, and how much it says it has.
 
 That last one matters more than it sounds. **A dead session and a search with no
 results look identical** from a client. `?probe=1` is where the difference
@@ -325,6 +335,57 @@ The answer is the same shape the
 [Unified Torrent Search Interface](https://github.com/momzv2022-ctrl/unified-torrent-search-interface)
 produce, down to the percent-encoding in the magnet, so an app can hold results
 from all three without seeing two of everything.
+
+## The public indexes too, through your own UTSI
+
+A client holds one URL and one key. If you also want the public indexes, the
+place to combine them is here, not in the app — and the
+[Unified Torrent Search Interface](https://github.com/momzv2022-ctrl/unified-torrent-search-interface)
+is the sibling project that searches them, in the same protocol this bridge
+speaks. Deploy one of your own from its setup page, then give this bridge its
+URL and its key: the two boxes in step 1 of the setup page, or `UTSI_URL` and
+`UTSI_API_KEY` by hand.
+
+Every search then asks both, at the same time, and answers with one list.
+
+**It is the cheap half.** A UTSI row arrives with its infohash and its magnet,
+so it costs no `.torrent` fetch and does not count against `BRIDGE_MAX_RESOLVE`.
+A page that is half public rows reads half as many files, and a page that is
+all public rows is answered as soon as the tracker's own list request is. UTSI
+is asked in parallel, so it adds nothing to the wall clock unless it is slower
+than that request; `UTSI_TIMEOUT_S` caps how much slower it may be before the
+answer goes out without it, marked `degraded`.
+
+**The same release on both sides is one row, and the private copy wins.** One
+infohash is one info dict, `private` flag included, so a private tracker's
+release that also turns up on a public index is a private swarm from either
+side. The merged row carries the file's own announce, `private: true` and
+`indexer: "TorrentLeech"`; a magnet with the public five on it would name a
+swarm it can never reach, and publish it in the trying. `count` still counts
+both copies, which is what keeps paging stable; the row is handed over once.
+
+**Paging stays stable.** UTSI is asked the same question on every page —
+`UTSI_ROWS` of its best-ranked rows, with the filters and the sort along for
+the ride and never an offset — and the bridge sorts and pages over the merged
+set. So `count` and the order are the same answer on page one and page four,
+which a client that fans out over pages depends on. Past `UTSI_ROWS`, only
+TorrentLeech has more to page.
+
+**Its key stays here.** It is the lesser secret — it opens a search of public
+sites, not an account — and it is held the same way as the tracker's: sent to
+that one origin, never to a client, never in a URL, and `/healthz` shows
+neither it nor the URL. `/healthz?probe=1` runs a real search against it and
+says whether the key fits.
+
+**`torrent_url` on a public row**, with `BRIDGE_TORRENT_URLS=1`, is passed
+through when it points at a public host, and served from here, sealed, when it
+points at UTSI's own origin — that one needs UTSI's key, which your app does
+not have. With the setting off no row carries one, whichever side it came from.
+
+`BRIDGE_TRACKERS=torrentleech` keeps a configured UTSI out of every search
+without unsetting it, and `BRIDGE_TRACKERS=utsi` is a bridge with no tracker
+session at all — one URL for the public indexes alone. Rows from UTSI carry
+`sources` such as `UTSI/piratebay`, so a surprising row is easy to trace back.
 
 ## Why a search takes as long as it does
 
@@ -342,7 +403,8 @@ The whole difference is reading five `.torrent` files. Roughly, a search costs:
 ~1.1s per row whose file has to be read, and that is what the knobs move
 ```
 
-Three things make the second number smaller.
+Three things make the second number smaller, and a fourth makes it apply to
+fewer rows: a public row from your UTSI is never read at all.
 
 **The edge cache**, on by default. An infohash is a hash of the file's own
 contents and never changes, so once a row has been read the answer is good for a
@@ -414,9 +476,12 @@ Section 5 of the file is the only part that knows what a tracker is. An entry in
   read(env),        // its settings, or null when it is not configured at all
   search(...),      // a query in, rows out
   probe(...),       // a live answer for /healthz?probe=1
-  fileRequest(...), // where a row's .torrent is, and what to send with it
+  fileRequest(...), // a row's .torrent URL in, the headers to fetch it with out
 }
 ```
+
+There are two to copy from: `torrentleech`, for a website with a login, and
+`utsi`, for anything that already speaks TSP.
 
 Sections 2 to 4 — the name parser, the merge, the filters, the wire shape — do
 not change, and neither do the routes. `BRIDGE_TRACKERS` then selects which
@@ -427,8 +492,9 @@ answers.
 
 - **It is one file.** [`worker/src/worker.js`](worker/src/worker.js). No
   dependencies, no build step, no minifier. What you run is what you read.
-- **Search it for `fetch(`.** There is one, and it goes to `TL_HOST`. Nothing
-  else is contacted, ever, and there is no telemetry.
+- **Search it for `fetch(`.** There is one, and it goes to `TL_HOST` — and to
+  `UTSI_URL`, if you set one. Nothing else is contacted, ever, and there is no
+  telemetry.
 - **Your credentials go into headers, on requests to the tracker.** Never into a
   query string, where they would land in access logs. CI asserts that no
   keyless route ever returns one.
@@ -443,9 +509,11 @@ answers.
   never makes a request. A browser check opens it at five screen sizes on every
   push and fails the build if it ever reaches the network.
 - **The tests run offline**, on Node 20, 22 and 24, on every push. TorrentLeech
-  is a table of recorded rows, and the whole answer is frozen in
-  [`worker/tests/golden/search.json`](worker/tests/golden/search.json), so any
-  change to what a client receives shows up as a diff a person has to approve.
+  is a table of recorded rows and so is UTSI, and the whole answer is frozen in
+  [`worker/tests/golden/search.json`](worker/tests/golden/search.json) — the
+  combined one in [`combined.json`](worker/tests/golden/combined.json) beside
+  it — so any change to what a client receives shows up as a diff a person has
+  to approve.
 
 ```sh
 npm test
@@ -476,8 +544,8 @@ It **keeps no log**. Nothing is written anywhere: there is no database, no file
 and no state between requests. The two things it holds in memory — infohashes it
 has learned, and a session it has logged in for — die with the process.
 
-It is not anonymity. The tracker sees the query, and on the Cloudflare path
-Cloudflare carries it. What it does do is keep your session, your password and
+It is not anonymity. The tracker sees the query, so do your UTSI and the public
+indexes behind it, and on the Cloudflare path Cloudflare carries it. What it does do is keep your session, your password and
 your passkey on the server side of the line.
 
 There is **no public instance of this and no list of other people's**. The only

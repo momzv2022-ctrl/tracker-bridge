@@ -27,7 +27,7 @@
  *   2. helpers    — text, numbers, infohashes, magnets, bencode, sealed tokens
  *   3. names      — the six fields a release name carries, and its category
  *   4. rows       — merge, filter, sort, and the wire shape
- *   5. trackers   — the registry, and TorrentLeech
+ *   5. trackers   — the registry, TorrentLeech, and your own UTSI
  *   6. routes     — auth, /api/v1/search, /api/v1/torrentfile, /healthz
  *   7. entry      — Cloudflare, Node, and the test seam
  *
@@ -36,11 +36,13 @@
  * here and a row there byte-identical, so a client can hold results from all
  * three without seeing two of everything.
  *
- * Section 5 is the only part that knows what a tracker is. Adding a second one
- * is adding one entry to `TRACKERS`, and nothing else in this file changes.
+ * Section 5 is the only part that knows what a tracker is. It has two entries,
+ * TorrentLeech and a Unified Torrent Search Interface of your own — the public
+ * indexes, in one list with the tracker, from the one URL and key a client can
+ * hold. A third is one more entry in `TRACKERS`, and nothing else changes.
  */
 
-const VERSION = "0.1.0";
+const VERSION = "0.2.0";
 
 // ── the settings the setup page bakes in, and where they come from ──────────
 //
@@ -71,6 +73,14 @@ const TL_RSSKEY = "";
 const TL_USERNAME = "";
 const TL_PASSWORD = "";
 const TL_2FA = "";
+
+// Optional: a Unified Torrent Search Interface of your own, and its key. With
+// both set every search asks it too, and the public indexes land in the same
+// list. `UTSI_URL` and `UTSI_API_KEY` win over these. The key opens a search of
+// public sites rather than an account, and is held like the rest: here, sent
+// to that one origin, never to a client.
+const UTSI_URL = "";
+const UTSI_KEY = "";
 
 // Whether to announce over http rather than https. `1` for yes, `0` for no,
 // and `BRIDGE_ANNOUNCE_HTTP` wins over it.
@@ -299,22 +309,14 @@ function readSettings(env) {
 
     // Whether to advertise `torrent_url` at all.
     //
-    // **Off, and that is not the obvious default.** TSP calls the field the
-    // `.torrent` "if the index knows one", and this one always does — it has
-    // just read the file to get the infohash. But a client reads more into it
-    // than that, and reasonably: for a public catalogue the `.torrent` carries
-    // `url-list` web seeds, so having it really does take peers off the
-    // critical path, and a client that has it stops reporting a swarm.
-    //
-    // A private tracker's file has no web seeds. Checked, on a real one: no
-    // `url-list`, no `httpseeds`, `private: 1`. The file removes the *metadata*
-    // fetch from the critical path and nothing else; every byte still comes
-    // from peers. So a client told "there is a direct source here" hides the
-    // seeder count on the one kind of row where it matters most.
-    //
-    // On, this mints the field and a start is quicker and surer, because the
-    // info dict arrives over HTTPS instead of from the swarm. Worth having if
-    // your client treats it as what it is.
+    // **Off, and that is not the obvious default.** A client reads a promise
+    // into the field: a public catalogue's file carries web seeds, so peers
+    // are off the critical path, and a client that has it stops reporting a
+    // swarm. A private tracker's file has none — checked, on a real one — so
+    // it takes only the metadata fetch off the critical path, and a client
+    // told "direct source" hides the seeder count on the one kind of row where
+    // it matters most. On, a start is quicker and surer; worth having if your
+    // client treats the field as what it is.
     torrentUrls: envFlag(env, "BRIDGE_TORRENT_URLS", false),
 
     // How long a `torrent_url` stays valid. The URL carries a sealed token
@@ -331,9 +333,9 @@ function readSettings(env) {
     userAgent: envText(env, "BRIDGE_USER_AGENT", BROWSER_UA),
   };
 
-  // Which trackers are switched on. Empty means every one that is configured,
-  // which today is the only one there is. This is the seam the next tracker
-  // arrives through: `BRIDGE_TRACKERS=torrentleech,somethingelse`.
+  // Which trackers are switched on. Empty means every one that is configured.
+  // `BRIDGE_TRACKERS=torrentleech` keeps a configured UTSI out of every search
+  // without unsetting it, and the same seam is where a third tracker arrives.
   const wanted = envList(env, "BRIDGE_TRACKERS").map((id) => id.toLowerCase());
 
   settings.trackers = [];
@@ -376,9 +378,9 @@ function upstreamProblem(settings) {
 // ═══════════════════════════════════════════════════════════════════════════
 //
 // Everything from here to the end of section 4 is a copy of the corresponding
-// code in the Unified Torrent Search Interface Worker, unchanged. That is on
-// purpose and worth the duplication: it is what makes a row produced here and a
-// row produced there the same bytes, down to the percent-encoding in the magnet.
+// code in the Unified Torrent Search Interface Worker, and the few additions
+// say so where they are. It is what makes a row produced here and a row
+// produced there the same bytes, down to the percent-encoding in the magnet.
 
 function quote(text) {
   return encodeURIComponent(text).replace(
@@ -1089,10 +1091,23 @@ function merge(rows) {
     if (existing.files === null) existing.files = row.files;
     existing.category = existing.category || row.category;
     existing.descriptionUrl = existing.descriptionUrl || row.descriptionUrl;
+    existing.torrentUrl = existing.torrentUrl || row.torrentUrl;
     existing.infohash = existing.infohash || row.infohash;
     existing.sources = existing.sources.concat(row.sources);
     if (row.firstSeen && (existing.firstSeen === null || row.firstSeen < existing.firstSeen)) {
       existing.firstSeen = row.firstSeen;
+    }
+    // The copy whose `.torrent` was read knows where the swarm is: one infohash
+    // is one info dict, `private` flag included, so a private release on a
+    // public index too is a private swarm from either side. Its announce, URL
+    // and tracker move over. Only section 5 sets `trackers`.
+    if (Array.isArray(row.trackers) && !Array.isArray(existing.trackers)) {
+      existing.trackers = row.trackers;
+      existing.magnet = row.magnet;
+      existing.private = row.private;
+      existing.downloadUrl = row.downloadUrl;
+      existing.torrentUrl = null;
+      existing.indexer = row.indexer;
     }
   }
   return [...merged.values()];
@@ -1175,17 +1190,10 @@ function sortRows(rows, sort) {
  * Absent fields are omitted rather than sent as null: a client reads an absent
  * numeric as zero, and this is the shape the sibling project emits.
  *
- * **`torrent_url` points back here**, never at the tracker. TSP says a client
- * sends its key only to the index's own origin, so a tracker URL would arrive
- * unusable *and* would carry your passkey to the phone, which is the thing this
- * bridge exists to keep to itself. Instead the URL names this bridge and carries
- * a sealed token that only this bridge can read; `/api/v1/torrentfile/` opens it
- * and fetches the file.
- *
- * That field is what makes a private tracker usable rather than merely visible.
- * `private: 1` disables DHT and PEX, so the magnet — which TSP requires on every
- * row and which is therefore still emitted — cannot reach the swarm on its own.
- * The `.torrent`, with its passkey in the announce URL, can.
+ * **A tracker's `torrent_url` points back here**, never at the tracker: TSP
+ * sends a key only to the index's own origin, so a tracker URL would arrive
+ * unusable *and* carry your passkey to the phone. It names this bridge and a
+ * sealed token only this bridge can read, and `/api/v1/torrentfile/` opens it.
  */
 async function toTorrent(row, scrapedAt, settings = null, origin = "") {
   if (!row.infohash) return null;
@@ -1195,12 +1203,17 @@ async function toTorrent(row, scrapedAt, settings = null, origin = "") {
     infohash: row.infohash,
     name: row.name,
   };
-  if (settings && settings.torrentUrls && origin && row.downloadUrl && settings.maxResolve) {
-    const token = await seal(settings, {
-      u: row.downloadUrl,
-      e: Date.now() + settings.torrentfileTtlS * 1000,
-    });
-    if (token) torrent.torrent_url = `${origin}/api/v1/torrentfile/${row.infohash}?t=${token}`;
+  if (settings && settings.torrentUrls) {
+    if (row.torrentUrl) {
+      // A public host's file needs nothing to fetch, and is passed through.
+      torrent.torrent_url = row.torrentUrl;
+    } else if (origin && row.downloadUrl && settings.maxResolve) {
+      const token = await seal(settings, {
+        u: row.downloadUrl,
+        e: Date.now() + settings.torrentfileTtlS * 1000,
+      });
+      if (token) torrent.torrent_url = `${origin}/api/v1/torrentfile/${row.infohash}?t=${token}`;
+    }
   }
   if (row.sizeBytes !== null) torrent.size_bytes = row.sizeBytes;
   if (row.files !== null) torrent.files = row.files;
@@ -1213,6 +1226,11 @@ async function toTorrent(row, scrapedAt, settings = null, origin = "") {
   torrent.scraped_at = scrapedAt;
   if (row.descriptionUrl) torrent.description_url = row.descriptionUrl;
   if (row.sources.length) torrent.sources = [...new Set(row.sources)].sort();
+  // Two more the contract does not name, for a client holding private and
+  // public rows in one list: `private` is the file's own flag, which keeps a
+  // client off the public trackers and the DHT; `indexer` is who had it.
+  if (row.private) torrent.private = true;
+  if (row.indexer) torrent.indexer = row.indexer;
   return torrent;
 }
 
@@ -1226,12 +1244,12 @@ async function toTorrent(row, scrapedAt, settings = null, origin = "") {
 //
 // An entry is an object with:
 //
-//   id, label      what it is called, in a setting and on a screen
-//   read(env)      its settings, or null when it is not configured at all
-//   search(...)    a query in, rows out
-//   fileUrl(row)   where that row's `.torrent` lives, and what to send with it
-//   owns(url)      whether a sealed torrent_url is aimed at this tracker
-//   probe(...)     a live answer for /healthz?probe=1
+//   id, label         what it is called, in a setting and on a screen
+//   read(env)         its settings, or null when it is not configured at all,
+//                     with `auth` and `torrentfile` in its own words for /healthz
+//   search(...)       a query in, rows out
+//   probe(...)        a live answer for /healthz?probe=1
+//   fileRequest(...)  a row's `.torrent` URL in, the headers to fetch it with out
 
 /** Something went wrong upstream. *status* is what the client should be told. */
 class BridgeError extends Error {
@@ -1573,8 +1591,12 @@ function tlRow(entry, tl) {
     // candidate until resolveWindow() has read its `.torrent`.
     infohash: null,
     downloadUrl: tlFileUrl(tl, id, filename),
+    // Never a public copy of the file: toTorrent serves this one from here.
+    torrentUrl: null,
     trackers: null,
     magnet: null,
+    // The file's own word, once applyTorrent() has read it.
+    private: null,
     sizeBytes: positiveOrNone(entry.size),
     files: positiveOrNone(entry.numfiles),
     seeders: intOrNone(entry.seeders),
@@ -1585,6 +1607,7 @@ function tlRow(entry, tl) {
     // session; it is the same URL the site's own search would link to.
     descriptionUrl: `${tl.host}/torrent/${id}`,
     sources: [tl.label],
+    indexer: tl.label,
     trackerId: tl.id,
     // Two listings of one file, before either has been read. See dedupeKey.
     dupeKey: `${tl.id}:${filename.toLowerCase()}:${positiveOrNone(entry.size) ?? "?"}`,
@@ -1969,14 +1992,8 @@ async function tlSearch(query, http, tl, settings) {
 /** A live answer for /healthz?probe=1: can this actually search right now? */
 async function tlProbe(http, tl, settings) {
   const report = { tracker: tl.id, label: tl.label, host: tl.host, reachable: false, authenticated: false };
-  report.auth = tl.cookie ? "cookie" : tl.username && tl.password ? "login" : "none";
-  report.torrentfile = tl.rssKeyGiven && !tl.rssKey
-    ? "unusable rss key"
-    : tl.rssKey
-      ? "rss key"
-      : report.auth === "none"
-        ? "none"
-        : "session";
+  report.auth = tl.auth;
+  report.torrentfile = tl.torrentfile;
   if (tl.problem) {
     report.detail = "No session and no login: set TL_COOKIE, or TL_USERNAME and TL_PASSWORD.";
     return report;
@@ -1997,6 +2014,155 @@ async function tlProbe(http, tl, settings) {
     report.reachable = thrown.code !== "tracker_unreachable";
     report.detail = thrown.detail;
     report.code = thrown.code;
+  }
+  return report;
+}
+
+// --- your own UTSI -----------------------------------------------------------
+//
+// The sibling project: a Worker of your own that asks the public indexes and
+// answers in TSP, so its rows arrive with an infohash and a magnet and cost no
+// `.torrent` fetch. Asked in parallel with TorrentLeech; UTSI_TIMEOUT_S caps
+// how much slower than the tracker's own list request it may be.
+
+/** Whether *url* is on *origin*. */
+function sameOrigin(url, origin) {
+  try {
+    return new URL(url).origin === new URL(origin).origin;
+  } catch {
+    return false;
+  }
+}
+
+/** One TSP row from UTSI as a row here, or null when it is not one. */
+function utsiRow(item, utsi) {
+  if (!item || typeof item !== "object") return null;
+  const infohash = normalizeInfohash(item.infohash) || infohashFromMagnet(String(item.magnet || ""));
+  const name = cleanName(item.name);
+  if (!infohash || !name) return null;
+
+  // Its file, if it said. On UTSI's own origin it needs UTSI's key, which a
+  // client does not have, so it is served from here, sealed; on a public host
+  // it needs nothing, and passes through.
+  const file = String(item.torrent_url || "");
+  const url = /^https?:\/\//iu.test(file) ? file : "";
+  const onUtsi = sameOrigin(url, utsi.host);
+  const category = String(item.category || "");
+  // Prefixed, so an engine over there never reads as a tracker of this
+  // bridge's own.
+  const sources = (Array.isArray(item.sources) ? item.sources : [])
+    .filter(Boolean)
+    .map((one) => `${utsi.label}/${one}`);
+  return {
+    name,
+    infohash,
+    downloadUrl: onUtsi ? url : null,
+    torrentUrl: url && !onUtsi ? url : null,
+    // Built by toTorrent, not copied: the same function and public five give
+    // the magnet UTSI made, even after a merge has renamed the row.
+    trackers: null,
+    magnet: null,
+    private: false,
+    sizeBytes: positiveOrNone(item.size_bytes),
+    files: positiveOrNone(item.files),
+    seeders: intOrNone(item.seeders),
+    leechers: intOrNone(item.leechers),
+    category: CATEGORIES.includes(category) ? category : null,
+    firstSeen: isoStamp(item.first_seen),
+    descriptionUrl: String(item.description_url || "") || null,
+    sources: sources.length ? sources : [utsi.label],
+    indexer: utsi.label,
+    trackerId: utsi.id,
+    meta: null,
+  };
+}
+
+/** The URL for a search: TSP's own route, with the filters travelling along. */
+function utsiSearchUrl(query, utsi, settings) {
+  const params = { q: query.terms };
+  // With the filters, so what comes back is the best *qualifying* rows.
+  const wanted = { cat: query.cat, year: query.year, res: query.res, min_seeders: query.minSeeders, sort: query.sort };
+  for (const [name, value] of Object.entries(wanted)) if (value) params[name] = String(value);
+  // **A fixed number of rows, never the page asked for.** Paging happens here,
+  // over the merged set, and `count` and the order are the same answer on
+  // every page only if UTSI is asked the same question every time.
+  params.limit = String(query.terms ? utsi.rows : Math.min(settings.browseRows, utsi.rows));
+  return `${utsi.host}/api/v1/search?${urlencode(params)}`;
+}
+
+/**
+ * UTSI, as rows. One request, no session, no spacing. Every failure names the
+ * setting to look at, because from a client a dead UTSI and a search that
+ * found nothing on the public indexes look identical.
+ */
+async function utsiSearch(query, http, utsi, settings) {
+  if (!query.terms && !settings.browseRows) return { rows: [], found: 0, engines: [] };
+
+  let response;
+  try {
+    response = await http.send(utsiSearchUrl(query, utsi, settings), {
+      timeout: Math.min(utsi.timeoutS, settings.timeoutS),
+      headers: {
+        "User-Agent": `tracker-bridge/${VERSION}`,
+        Accept: "application/json",
+        ...(utsi.apiKey ? { "X-API-Key": utsi.apiKey } : {}),
+      },
+    });
+  } catch (thrown) {
+    throw new BridgeError(502, "utsi_unreachable", `Could not reach ${utsi.host}: ${message(thrown)}.`);
+  }
+  if (response.status === 401 || response.status === 403) {
+    throw new BridgeError(
+      502,
+      "utsi_rejected_key",
+      response.status === 403
+        ? "Your UTSI rejected the key: UTSI_API_KEY is not the key that Worker was deployed with."
+        : utsi.apiKey
+          ? "This bridge sent a key and your UTSI saw none: something between them is dropping the X-API-Key header."
+          : "Your UTSI needs a key and UTSI_API_KEY is not set.",
+    );
+  }
+  if (response.status !== 200) {
+    throw new BridgeError(502, "utsi_error", `Your UTSI answered HTTP ${response.status}.`);
+  }
+
+  let payload = null;
+  try {
+    payload = JSON.parse(await response.text());
+  } catch {
+    // Not JSON: the wrong shape, below.
+  }
+  if (!payload || !Array.isArray(payload.torrents)) {
+    throw new BridgeError(
+      502,
+      "utsi_error",
+      "Your UTSI's answer was not a TSP search result. UTSI_URL should be the Worker itself, not a page in front of it.",
+    );
+  }
+  const rows = payload.torrents.map((item) => utsiRow(item, utsi)).filter(Boolean);
+  return {
+    rows,
+    found: intOrNone(payload.count) ?? rows.length,
+    engines: Array.isArray(payload.engines) ? payload.engines.filter((one) => typeof one === "string") : [],
+    partial: payload.partial === true,
+  };
+}
+
+/** A live answer for /healthz?probe=1: does it answer, and does the key fit? */
+async function utsiProbe(http, utsi, settings) {
+  const report = {
+    tracker: utsi.id, label: utsi.label, host: utsi.host, reachable: false, authenticated: false,
+    auth: utsi.auth, torrentfile: utsi.torrentfile,
+  };
+  if (utsi.problem) return { ...report, detail: "UTSI_URL is not an https:// address." };
+  try {
+    // A real search, because nothing else proves the key. One row is enough.
+    const query = { terms: "big buck bunny", cat: "", year: "", res: "", minSeeders: 0, sort: "" };
+    const answer = await utsiSearch(query, http, { ...utsi, rows: 1 }, settings);
+    Object.assign(report, { reachable: true, authenticated: true, matches: answer.found, engines: answer.engines });
+  } catch (thrown) {
+    if (!(thrown instanceof BridgeError)) throw thrown;
+    Object.assign(report, { reachable: thrown.code !== "utsi_unreachable", detail: thrown.detail, code: thrown.code });
   }
   return report;
 }
@@ -2035,6 +2201,18 @@ const TRACKERS = {
         problem: "",
       };
 
+      // For /healthz: what it searches with, and what it fetches a `.torrent`
+      // with. An RSS key does not expire and a session does, which is why a
+      // search can start failing on its own.
+      tracker.auth = tracker.cookie ? "cookie" : tracker.username && tracker.password ? "login" : "none";
+      tracker.torrentfile = tracker.rssKeyGiven && !tracker.rssKey
+        ? "unusable rss key"
+        : tracker.rssKey
+          ? "rss key"
+          : tracker.cookie || tracker.username
+            ? "session"
+            : "none";
+
       // Nothing configured at all is not a fault, it is a tracker that is
       // switched off, and it is left out of the list entirely.
       if (!tracker.cookie && !tracker.username && !tracker.rssKey) return null;
@@ -2049,22 +2227,53 @@ const TRACKERS = {
     async fileRequest(url, http, tracker, settings) {
       // The RSS route carries its own authorisation in the path, so it needs no
       // session and cannot be broken by one expiring.
-      if (url.includes("/rss/download/")) return { url, cookie: "" };
+      if (url.includes("/rss/download/")) return { url, headers: {} };
       const cookie = tlCookie(tracker) || (await tlLogin(http, tracker, settings));
-      return { url, cookie };
+      return { url, headers: cookie ? { Cookie: cookie } : {} };
+    },
+  },
+
+  utsi: {
+    id: "utsi",
+    label: "UTSI",
+
+    read(env) {
+      const given = envText(env, "UTSI_URL") || String(UTSI_URL || "").trim();
+      const apiKey = envText(env, "UTSI_API_KEY") || String(UTSI_KEY || "").trim();
+      if (!given && !apiKey) return null;
+      // An origin and nothing more: a pasted URL tends to end in a slash.
+      const host = envOrigin(env, "UTSI_URL", given);
+      return {
+        id: "utsi",
+        label: "UTSI",
+        host,
+        apiKey,
+        // Rows to ask for on every search: fixed, not the page size, so that
+        // paging over the merged set is stable. See utsiSearchUrl.
+        rows: envInt(env, "UTSI_ROWS", 100, 1, MAX_LIMIT),
+        // How long to wait for it before answering without it.
+        timeoutS: envInt(env, "UTSI_TIMEOUT_S", 10, 1, 60),
+        auth: apiKey ? "key" : "none",
+        // Its rows arrive with their infohash, so nothing is fetched to serve
+        // them; the key is used again only for a `torrent_url` on its origin.
+        torrentfile: "not needed",
+        problem: host ? "" : "bad_url",
+      };
+    },
+
+    search: utsiSearch,
+    probe: utsiProbe,
+
+    /** A file on its own origin is fetched with its key; see trackerFor. */
+    async fileRequest(url, http, tracker) {
+      return { url, headers: tracker.apiKey ? { "X-API-Key": tracker.apiKey } : {} };
     },
   },
 };
 
 /** The tracker a sealed `torrent_url` names, or null if no configured one owns it. */
 function trackerFor(settings, url) {
-  let target;
-  try {
-    target = new URL(url);
-  } catch {
-    return null;
-  }
-  return settings.trackers.find((tracker) => new URL(tracker.host).origin === target.origin) || null;
+  return settings.trackers.find((tracker) => tracker.host && sameOrigin(url, tracker.host)) || null;
 }
 
 // --- resolving ---------------------------------------------------------------
@@ -2091,7 +2300,7 @@ async function fetchTorrent(row, http, tracker, settings) {
         "User-Agent": settings.userAgent,
         Accept: "application/x-bittorrent, application/octet-stream, */*",
         Referer: `${tracker.host}/`,
-        ...(request.cookie ? { Cookie: request.cookie } : {}),
+        ...(request.headers || {}),
       },
     });
   } catch {
@@ -2289,7 +2498,9 @@ async function search(query, http, settings, origin = "") {
   // it over the page rather than the whole set is what keeps `count` and the
   // ordering the same answer on every page.
   const resolved = merge(window.filter((row) => row.infohash));
-  const unresolved = window.length - resolved.length;
+  // Counted before that merge, not as a difference after it: a row that
+  // collapsed into another tracker's copy was read, not lost.
+  const unresolved = window.filter((row) => !row.infohash).length;
 
   const scrapedAt = nowIso();
   const page = [];
@@ -2315,12 +2526,9 @@ async function search(query, http, settings, origin = "") {
 
   // Not part of the contract, and clients ignore fields they do not know.
   //
-  // `count` is what this bridge can actually serve, which is the honest number
-  // to page against. `total_found` is what the tracker said it had, which is
-  // almost always larger: its list endpoint serves one page, sized by the
-  // *Torrents per page* setting on your own profile. The two together are the
-  // difference between "there are no more" and "there are more, and here is how
-  // to be shown them".
+  // `total_found` is what the trackers said they had, which is almost always
+  // larger than `count`: TorrentLeech serves one page of its own, sized by the
+  // *Torrents per page* setting on your profile, and UTSI serves UTSI_ROWS.
   if (found > ordered.length) body.total_found = found;
   // Rows on this page whose `.torrent` could not be read, or that came after
   // BRIDGE_MAX_RESOLVE stopped short. These are rows you asked for and did not
@@ -2330,6 +2538,8 @@ async function search(query, http, settings, origin = "") {
   if (failures.length) {
     body.degraded = failures.map((answer) => `${answer.tracker.label}: ${answer.failed.detail}`);
   }
+  // A UTSI that stopped waiting for its slowest engines says so; passed along.
+  if (answers.some((answer) => answer.partial)) body.partial = true;
 
   return reply(200, body);
 }
@@ -2480,18 +2690,10 @@ function healthz(settings) {
     api_key: isConfigured(settings) ? "ok" : keyProblem(settings),
     trackers: settings.trackers.map((tracker) => ({
       id: tracker.id,
-      // What it would search with. `cookie` is a session you pasted, `login` is
-      // a username and password it can renew by itself, `none` is neither.
-      auth: tracker.cookie ? "cookie" : tracker.username && tracker.password ? "login" : "none",
-      // What it would fetch a `.torrent` with. An RSS key does not expire; a
-      // session does, and is the reason a search can start failing on its own.
-      torrentfile: tracker.rssKeyGiven && !tracker.rssKey
-        ? "unusable rss key"
-        : tracker.rssKey
-          ? "rss key"
-          : tracker.cookie || tracker.username
-            ? "session"
-            : "none",
+      // What it searches with and fetches with, in its own words, and never
+      // the credential itself.
+      auth: tracker.auth,
+      torrentfile: tracker.torrentfile,
       status: tracker.problem || "ok",
     })),
     // Whether rows carry a `torrent_url`. Here because a client that branches
@@ -2810,11 +3012,16 @@ async function torrentfile(wanted, params, http, settings, cors) {
         "User-Agent": settings.userAgent,
         Accept: "application/x-bittorrent, application/octet-stream, */*",
         Referer: `${tracker.host}/`,
-        ...(request.cookie ? { Cookie: request.cookie } : {}),
+        ...(request.headers || {}),
       },
     });
     if (response.status === 401 || response.status === 403) {
-      return error(502, "tracker_rejected_session", `${tracker.label} refused this bridge's session.`, cors);
+      return error(
+        502,
+        "tracker_rejected_session",
+        `${tracker.label} refused this bridge's ${tracker.auth === "key" ? "key" : "session"}.`,
+        cors,
+      );
     }
     if (response.status !== 200) {
       return error(502, "tracker_error", `${tracker.label} answered HTTP ${response.status} for that file.`, cors);
@@ -3038,6 +3245,7 @@ export const __testing = {
   readSettings,
   render,
   resolveWindow,
+  sameOrigin,
   seal,
   search,
   sortRows,
@@ -3050,4 +3258,8 @@ export const __testing = {
   toTorrent,
   torrentfile,
   unseal,
+  utsiProbe,
+  utsiRow,
+  utsiSearch,
+  utsiSearchUrl,
 };

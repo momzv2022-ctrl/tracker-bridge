@@ -1,34 +1,76 @@
 {
-  "query": "",
-  "count": 6,
+  "query": "bunny",
+  "count": 10,
   "limit": 50,
   "offset": 0,
   "torrents": [
     {
+      "magnet": "magnet:?xt=urn:btih:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1&dn=Sintel%202010%201080p%20WEB-DL%20x264-PUBLIC&tr=udp%3A%2F%2Ftracker.opentrackr.org%3A1337%2Fannounce&tr=udp%3A%2F%2Fopen.stealth.si%3A80%2Fannounce&tr=udp%3A%2F%2Ftracker.torrent.eu.org%3A451%2Fannounce&tr=udp%3A%2F%2Fexodus.desync.com%3A6969%2Fannounce&tr=udp%3A%2F%2Fopen.demonii.com%3A1337%2Fannounce",
+      "infohash": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+      "name": "Sintel 2010 1080p WEB-DL x264-PUBLIC",
+      "torrent_url": "https://cdn.public.example/sintel-1080p.torrent",
+      "size_bytes": 1610612736,
+      "files": 2,
+      "category": "video",
+      "seeders": 3200,
+      "leechers": 40,
+      "year": "2010",
+      "resolution": "1080p",
+      "codec": "x264",
+      "source": "web-dl",
+      "first_seen": "2019-02-11T10:00:00Z",
+      "description_url": "https://public.example/torrent/sintel-1080p",
+      "sources": [
+        "UTSI/yts"
+      ],
+      "indexer": "UTSI"
+    },
+    {
       "magnet": "magnet:?xt=urn:btih:33b3b894c7a0ec72f937b716e2d49ff3d2ea69af&dn=Big%20Buck%20Bunny%202008%201080p%20BluRay%20x264-GROUP%20%5BREPOST%5D&tr=https%3A%2F%2Ftracker.torrentleech.org%2Fa%2Fpk-0123456789abcdef0123456789abcdef%2Fannounce",
       "infohash": "33b3b894c7a0ec72f937b716e2d49ff3d2ea69af",
       "name": "Big Buck Bunny 2008 1080p BluRay x264-GROUP [REPOST]",
+      "torrent_url": "https://bridge.example/api/v1/torrentfile/33b3b894c7a0ec72f937b716e2d49ff3d2ea69af?t=<sealed>",
       "size_bytes": 8589934592,
       "files": 3,
       "category": "video",
-      "seeders": 412,
-      "leechers": 17,
+      "seeders": 1500,
+      "leechers": 120,
       "year": "2008",
       "resolution": "1080p",
       "codec": "x264",
       "source": "bluray",
-      "first_seen": "2021-10-25T02:18:31Z",
-      "description_url": "https://www.torrentleech.org/torrent/1000001",
+      "first_seen": "2020-06-01T00:00:00Z",
+      "description_url": "https://public.example/torrent/bbb-1080p",
       "sources": [
-        "TorrentLeech"
+        "TorrentLeech",
+        "UTSI/knaben",
+        "UTSI/piratebay"
       ],
       "private": true,
       "indexer": "TorrentLeech"
     },
     {
+      "magnet": "magnet:?xt=urn:btih:2a459234ca52e6c7832e46544910bac9fb751c9a&dn=Ubuntu%2024.04%20Desktop%20amd64&tr=udp%3A%2F%2Ftracker.opentrackr.org%3A1337%2Fannounce&tr=udp%3A%2F%2Fopen.stealth.si%3A80%2Fannounce&tr=udp%3A%2F%2Ftracker.torrent.eu.org%3A451%2Fannounce&tr=udp%3A%2F%2Fexodus.desync.com%3A6969%2Fannounce&tr=udp%3A%2F%2Fopen.demonii.com%3A1337%2Fannounce",
+      "infohash": "2a459234ca52e6c7832e46544910bac9fb751c9a",
+      "name": "Ubuntu 24.04 Desktop amd64",
+      "torrent_url": "https://bridge.example/api/v1/torrentfile/2a459234ca52e6c7832e46544910bac9fb751c9a?t=<sealed>",
+      "size_bytes": 6114656256,
+      "files": 1,
+      "category": "software",
+      "seeders": 900,
+      "leechers": 15,
+      "first_seen": "2024-04-25T00:00:00Z",
+      "description_url": "https://public.example/torrent/ubuntu-2404",
+      "sources": [
+        "UTSI/torrentscsv"
+      ],
+      "indexer": "UTSI"
+    },
+    {
       "magnet": "magnet:?xt=urn:btih:4caea4ad0cbf258d98872c4fa422ab565579f4e1&dn=Big%20Buck%20Bunny%202008%202160p%20UHD%20BluRay%20REMUX-OTHER&tr=https%3A%2F%2Ftracker.torrentleech.org%2Fa%2Fpk-0123456789abcdef0123456789abcdef%2Fannounce",
       "infohash": "4caea4ad0cbf258d98872c4fa422ab565579f4e1",
       "name": "Big Buck Bunny 2008 2160p UHD BluRay REMUX-OTHER",
+      "torrent_url": "https://bridge.example/api/v1/torrentfile/4caea4ad0cbf258d98872c4fa422ab565579f4e1?t=<sealed>",
       "size_bytes": 64424509440,
       "files": 1,
       "category": "video",
@@ -49,6 +91,7 @@
       "magnet": "magnet:?xt=urn:btih:7e2e703799f382258055aeea589f3a69ba906d7b&dn=Tears%20of%20Steel%20Original%20Soundtrack%20FLAC&tr=https%3A%2F%2Ftracker.torrentleech.org%2Fa%2Fpk-0123456789abcdef0123456789abcdef%2Fannounce",
       "infohash": "7e2e703799f382258055aeea589f3a69ba906d7b",
       "name": "Tears of Steel Original Soundtrack FLAC",
+      "torrent_url": "https://bridge.example/api/v1/torrentfile/7e2e703799f382258055aeea589f3a69ba906d7b?t=<sealed>",
       "size_bytes": 524288000,
       "files": 14,
       "category": "audio",
@@ -66,6 +109,7 @@
       "magnet": "magnet:?xt=urn:btih:6436d8607f624eeb9e8eaf54ce3e4e62bde6957f&dn=Some%20Application%20v3.2.1%20x64%20Portable&tr=https%3A%2F%2Ftracker.torrentleech.org%2Fa%2Fpk-0123456789abcdef0123456789abcdef%2Fannounce",
       "infohash": "6436d8607f624eeb9e8eaf54ce3e4e62bde6957f",
       "name": "Some Application v3.2.1 x64 Portable",
+      "torrent_url": "https://bridge.example/api/v1/torrentfile/6436d8607f624eeb9e8eaf54ce3e4e62bde6957f?t=<sealed>",
       "size_bytes": 2147483648,
       "files": 1,
       "category": "software",
@@ -83,6 +127,7 @@
       "magnet": "magnet:?xt=urn:btih:0a859ab094aea2503a979233c570edef562fbd05&dn=An.Unnamed.Release.2019.1080p.WEB-DL&tr=https%3A%2F%2Ftracker.torrentleech.org%2Fa%2Fpk-0123456789abcdef0123456789abcdef%2Fannounce",
       "infohash": "0a859ab094aea2503a979233c570edef562fbd05",
       "name": "An.Unnamed.Release.2019.1080p.WEB-DL",
+      "torrent_url": "https://bridge.example/api/v1/torrentfile/0a859ab094aea2503a979233c570edef562fbd05?t=<sealed>",
       "size_bytes": 4294967296,
       "files": 1,
       "category": "video",
@@ -103,6 +148,7 @@
       "magnet": "magnet:?xt=urn:btih:4b3afc04d0a2bd202f623344c5b1a8bfb62a6c62&dn=Sintel%20S01E02%20720p%20WEB-DL%20x265&tr=https%3A%2F%2Ftracker.torrentleech.org%2Fa%2Fpk-0123456789abcdef0123456789abcdef%2Fannounce",
       "infohash": "4b3afc04d0a2bd202f623344c5b1a8bfb62a6c62",
       "name": "Sintel S01E02 720p WEB-DL x265",
+      "torrent_url": "https://bridge.example/api/v1/torrentfile/4b3afc04d0a2bd202f623344c5b1a8bfb62a6c62?t=<sealed>",
       "size_bytes": 1073741824,
       "files": 1,
       "category": "video",
@@ -120,10 +166,29 @@
       ],
       "private": true,
       "indexer": "TorrentLeech"
+    },
+    {
+      "magnet": "magnet:?xt=urn:btih:ba843d59569620c3ff2d546cdd4eb3c41d06040a&dn=Cosmos%20Laundromat%202015%202160p&tr=udp%3A%2F%2Ftracker.opentrackr.org%3A1337%2Fannounce&tr=udp%3A%2F%2Fopen.stealth.si%3A80%2Fannounce&tr=udp%3A%2F%2Ftracker.torrent.eu.org%3A451%2Fannounce&tr=udp%3A%2F%2Fexodus.desync.com%3A6969%2Fannounce&tr=udp%3A%2F%2Fopen.demonii.com%3A1337%2Fannounce",
+      "infohash": "ba843d59569620c3ff2d546cdd4eb3c41d06040a",
+      "name": "Cosmos Laundromat 2015 2160p",
+      "category": "video",
+      "seeders": 0,
+      "leechers": 0,
+      "year": "2015",
+      "resolution": "2160p",
+      "sources": [
+        "UTSI"
+      ],
+      "indexer": "UTSI"
     }
   ],
   "engines": [
-    "TorrentLeech"
+    "TorrentLeech",
+    "UTSI",
+    "UTSI/knaben",
+    "UTSI/piratebay",
+    "UTSI/torrentscsv",
+    "UTSI/yts"
   ],
-  "total_found": 137
+  "total_found": 351
 }
