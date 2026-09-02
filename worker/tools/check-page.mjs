@@ -358,6 +358,20 @@ for (const viewport of VIEWPORTS) {
   });
   if (withUtsi !== utsiExpected) fail("the UTSI pair did not reach the file as its origin and its key");
   else console.log("  ✓ a UTSI URL and key reach the file as its origin and its key; one alone is refused");
+
+  // The wrong answer people actually give: UTSI's setup page, which is a
+  // GitHub Pages site and not a Worker. Refused, and it says what to paste.
+  await page.fill("#utsi-url", "https://momzv2022-ctrl.github.io/unified-torrent-search-interface/");
+  await page.waitForTimeout(250);
+  const setupPage = await page.evaluate(() => ({
+    disabled: document.getElementById("open-deploy").getAttribute("aria-disabled"),
+    status: document.getElementById("utsi-status").textContent,
+  }));
+  if (setupPage.disabled !== "true" || !/setup page, not your UTSI/.test(setupPage.status)) {
+    fail(`UTSI's setup page was accepted as a UTSI: ${JSON.stringify(setupPage)}`);
+  } else {
+    console.log("  ✓ UTSI's setup page is refused as a UTSI URL, with what to paste instead");
+  }
   await page.fill("#utsi-url", "");
   await page.fill("#utsi-key", "");
   await page.waitForFunction(

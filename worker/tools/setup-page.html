@@ -977,6 +977,11 @@ __PLAYGROUND_LIB__
     var typedKey = String(utsiKeyInput.value || "").trim();
     if (!typedUrl && !typedKey) return "";
     if (typedUrl && !utsiUrl()) return "That UTSI URL does not look like one.";
+    // The one wrong answer people give: the page that made their UTSI, rather
+    // than the UTSI. GitHub Pages is never a Worker.
+    if (/\.github\.io$/i.test(utsiUrl())) {
+      return "That is UTSI's setup page, not your UTSI. Yours ends in workers.dev, and that page showed it to you in its step 4.";
+    }
     if (!typedUrl) return "Your UTSI needs its URL as well as its key.";
     if (!typedKey) return "Your UTSI needs its key as well as its URL.";
     return "";
@@ -1389,10 +1394,18 @@ __PLAYGROUND_LIB__
         if (answer.status === 200 && answer.parsed) {
           var shown = (answer.parsed.torrents || []).length;
           var found = answer.parsed.count || 0;
-          testStatus.className = "status";
-          testStatus.textContent =
-            "It works. " + found + (found === 1 ? " match" : " matches") +
-            ", " + shown + " ready to stream, in " + (answer.parsed.took_ms || 0) + " ms.";
+          var degraded = answer.parsed.degraded || [];
+          if (degraded.length) {
+            // One side answered and one did not. The bridge itself is fine,
+            // and the sentence names the side that is not.
+            testStatus.className = "status bad";
+            testStatus.textContent = "Your bridge is live, but part of it is not working. " + degraded.join(" ");
+          } else {
+            testStatus.className = "status";
+            testStatus.textContent =
+              "It works. " + found + (found === 1 ? " match" : " matches") +
+              ", " + shown + " ready to stream, in " + (answer.parsed.took_ms || 0) + " ms.";
+          }
           rememberKey(key);
           return;
         }

@@ -1357,6 +1357,12 @@ test("a UTSI that is not one is refused rather than read", async () => {
   assert.match(page.body.degraded[0], /was not a TSP search result/);
   const shape = await search(query(), stubHttp({ utsi: { status: 200, body: '{"hello":"world"}' } }), settingsFrom(WITH_UTSI), "https://b.example");
   assert.match(shape.body.degraded[0], /was not a TSP search result/);
+
+  // A 404 is an origin with no such route, which is the page that made the
+  // UTSI rather than the UTSI. It says so, and names the Worker's own address.
+  const wrongPlace = await search(query(), stubHttp({ utsi: { status: 404, body: '{"error":"not_found"}' } }), settingsFrom(WITH_UTSI), "https://b.example");
+  assert.match(wrongPlace.body.degraded[0], /^UTSI: Your UTSI answered HTTP 404: there is no \/api\/v1\/search at https:\/\/utsi-abc123/);
+  assert.match(wrongPlace.body.degraded[0], /workers\.dev address its setup page showed you, not that page/);
 });
 
 test("torrent_url from UTSI: sealed on its own origin, passed through from a public host, gone when off", async () => {

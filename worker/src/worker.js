@@ -2123,7 +2123,15 @@ async function utsiSearch(query, http, utsi, settings) {
     );
   }
   if (response.status !== 200) {
-    throw new BridgeError(502, "utsi_error", `Your UTSI answered HTTP ${response.status}.`);
+    // A 404 is an origin with no such route, which is almost always the page
+    // that made the UTSI rather than the UTSI: a Worker always has this route.
+    throw new BridgeError(
+      502,
+      "utsi_error",
+      response.status === 404
+        ? `Your UTSI answered HTTP 404: there is no /api/v1/search at ${utsi.host}. UTSI_URL should be the Worker itself, the workers.dev address its setup page showed you, not that page.`
+        : `Your UTSI answered HTTP ${response.status}.`,
+    );
   }
 
   let payload = null;
