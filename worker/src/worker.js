@@ -273,17 +273,11 @@ function readSettings(env) {
     requestGapMs: envInt(env, "BRIDGE_REQUEST_GAP_MS", 120, 0, 10000),
 
     // Keep learned infohashes in Cloudflare's edge cache as well as in
-    // memory, so a cold isolate starts warm.
-    //
-    // Measured on a real deployment: a five-row search costs 7.4s the first
-    // time and 0.4s the second, and the whole difference is reading five
-    // `.torrent` files. In-memory that saving lasts as long as one isolate,
-    // which is not long. This makes it last a week.
-    //
-    // **What is stored is the file's announce list, and your passkey is in
-    // it.** It is the same secret this bridge already writes into every magnet
-    // it hands your client, held in a cache scoped to your own Worker — but it
-    // is a copy in one more place, so there is a switch for it.
+    // memory, so a cold isolate starts warm: a five-row search measured 7.4s
+    // cold and 0.4s warm, and the difference is reading five files. **What is
+    // stored is the file's announce list, and your passkey is in it** — the
+    // same secret every magnet already carries, in one more place, hence a
+    // switch.
     edgeCache: envFlag(env, "BRIDGE_EDGE_CACHE", true),
 
     // How long one of those entries lives. An infohash is a hash of the file's
@@ -293,17 +287,11 @@ function readSettings(env) {
 
     // Announce over http rather than https, in the magnet only.
     //
-    // **Off, and think before turning it on: your passkey is in that URL and
-    // http sends it in the clear**, to every network between the device and the
-    // tracker. It is here because some clients cannot make an https announce at
-    // all — a libtorrent built without a CA bundle, which is the usual state of
-    // affairs on Android, fails every https tracker with "unspecified system
-    // error" and finds no peers, while the same announce over http works. When
-    // that is the choice, a working private tracker on http may beat a broken
-    // one on https; it is not this file's decision to make quietly.
-    //
-    // TorrentLeech's tracker serves both, and does not redirect http to https,
-    // so the rewrite reaches it. Checked 2026-09-01.
+    // **Your passkey is in that URL and http sends it in the clear.** It exists
+    // because a libtorrent built without a CA bundle — the usual state of
+    // affairs on Android — fails every https tracker and finds no peers, while
+    // the same announce over http works. TorrentLeech's tracker serves both
+    // and does not redirect. Checked 2026-09-01.
     announceHttp: envFlag(env, "BRIDGE_ANNOUNCE_HTTP", ANNOUNCE_HTTP === 1),
 
     // Whether to advertise `torrent_url` at all.
@@ -2975,18 +2963,11 @@ async function handle(method, url, headers, http, settings) {
 /**
  * `GET /api/v1/torrentfile/<infohash>?t=<token>` — the file itself.
  *
- * TSP names this route and calls `torrent_url` decisive for thin swarms. For a
- * private tracker it is decisive for every swarm: `private: 1` turns off DHT
- * and peer exchange, so the magnet — which TSP requires on every row and which
- * is therefore still sent — cannot reach the swarm on its own. The `.torrent`,
- * with your passkey in its announce URL, can.
- *
  * The token is sealed, not signed: AES-GCM under your own `BRIDGE_API_KEY`, so
- * what the client holds is an opaque string it cannot read. Three things are
- * checked before anything is fetched, and the last is the one that matters: the
- * sealed URL must still belong to a configured tracker, so a token minted when
- * `TL_HOST` pointed somewhere else cannot turn this route into an open proxy
- * for whatever it named.
+ * what the client holds is an opaque string it cannot read. The check that
+ * matters: the sealed URL must still belong to a configured tracker, so a token
+ * minted when `TL_HOST` pointed somewhere else cannot turn this route into an
+ * open proxy for whatever it named.
  */
 async function torrentfile(wanted, params, http, settings, cors) {
   const infohash = normalizeInfohash(wanted);
@@ -3217,14 +3198,7 @@ async function serve() {
 
 if (startedDirectly()) await serve();
 
-/**
- * The seam the test suite reaches through, and the only thing in this file that
- * is not part of serving a request.
- *
- * Both runtimes ignore it. It is here so the tests can drive the pipeline
- * directly, with the tracker replaced by a fixture, rather than only through
- * `fetch()`.
- */
+/** The seam the tests reach through. Both runtimes ignore it. */
 export const __testing = {
   BridgeError,
   MIN_KEY_LENGTH,
