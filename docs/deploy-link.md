@@ -130,12 +130,12 @@ Workers upload API documents the field in exactly this shape:
 { "type": "service", "name": "UTSI", "service": "utsi-abc123-some-words" }
 ```
 
-and the deploy screen hands the metadata part on to that API. **Whether it
-hands this field on untouched is unverified.** Three outcomes are possible and
-the page is written for all of them: the binding arrives and the combined
-search works in one press; the field is dropped and the test in step 5 says
-UTSI answered 404, with the dashboard steps in the message; or the screen
-refuses the payload, which would show up as a blank page, and the "Deploy
-without the sign-in" route below the steps sends a link with no binding in
-it. The first person to deploy with a UTSI will find out which, and the
-README should then say.
+and the deploy screen hands the metadata part on to that API. **It does not
+hand this field on.** Checked on a real deploy on 2026-09-02: the Worker
+deployed without complaint and without the binding, and the bridge reported
+reaching its UTSI over the public URL. So the deploy is still one press, and
+the binding is one dashboard step afterwards, which the page, the bridge's own
+error message and the README all say. The field stays in the link because it
+costs nothing, is what the API documents, and may be kept by a later deploy
+screen; if it ever is, the dashboard step becomes unnecessary and the same
+three places should say so.

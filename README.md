@@ -66,7 +66,9 @@ for you. Free, no card, nothing installed, and it works on a phone.
 Five short steps: your TorrentLeech details, sign in to Cloudflare, press
 Deploy, open your new bridge and press Finish setup, and your URL and key are
 shown together with a button that tests them. Step 1 also has two optional
-boxes for a UTSI of your own; fill them in and the public indexes come along.
+boxes for a UTSI of your own; fill them in and the public indexes come along,
+after one dashboard step that Cloudflare leaves no way around — see
+[below](#the-public-indexes-too-through-your-own-utsi).
 
 **Everything the bridge needs is in that one press.** There is no second visit
 to a dashboard to set a variable, which matters because the one setting most
@@ -354,11 +356,13 @@ Worker's call to another Worker's `workers.dev` address on the same account
 past it is a Service binding named `UTSI` on the bridge, pointing at your UTSI,
 and the bridge uses it whenever it is there: `/healthz` says `via: "binding"`
 rather than `via: "url"`. The setup page writes the binding into the deploy
-link; whether Cloudflare's deploy screen keeps it is not yet verified, so if
-the test in step 5 says UTSI answered 404, add it by hand: open the bridge in
-Cloudflare, then *Settings*, *Bindings*, *Add*, *Service binding*, variable
-name `UTSI`, service: your UTSI, and press *Deploy*. Deploying by hand it is
-three lines of `wrangler.toml`, with the first label of the UTSI's
+link and Cloudflare's deploy screen drops it — checked on a real deploy,
+2026-09-02 — so this is the one setting that does take a visit to the
+dashboard, once, after deploying: open the bridge in Cloudflare, then
+*Settings*, *Bindings*, *Add*, *Service binding*, variable name `UTSI`,
+service: your UTSI, and press *Deploy* on that card. Until then the test in
+step 5 says UTSI answered 404, and the message says this. Deploying by hand
+it is three lines of `wrangler.toml`, with the first label of the UTSI's
 `workers.dev` address as the service:
 
 ```toml

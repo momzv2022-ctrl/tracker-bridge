@@ -455,11 +455,12 @@ label .why { text-transform: none; letter-spacing: 0; font-weight: 500; color: v
         <p class="note">
           Your bridge and your UTSI are two Workers on one Cloudflare account,
           and Cloudflare only lets one call the other through a
-          <em>Service binding</em>. The deploy link carries one. If the test in
-          step 5 still says UTSI answered 404, add it by hand: open your bridge
-          in Cloudflare, then <em>Settings</em>, <em>Bindings</em>, <em>Add</em>,
+          <em>Service binding</em>, which its deploy screen does not keep from
+          this link. So this is the one setting that takes a visit to the
+          dashboard, once, after deploying: open your bridge in Cloudflare,
+          then <em>Settings</em>, <em>Bindings</em>, <em>Add</em>,
           <em>Service binding</em>; name it <code>UTSI</code>, choose your UTSI,
-          and press <em>Deploy</em>.
+          and press <em>Deploy</em> on that card. Then press Test in step 5.
         </p>
         <div class="field">
           <label for="utsi-url">Your UTSI URL</label>
