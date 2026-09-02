@@ -15,10 +15,11 @@
 
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { bothLinks, compressToEncodedURIComponent, suggestedName } from "../tools/playground.js";
 
@@ -79,21 +80,29 @@ test("the build refuses a filled-in artifact rather than publishing one", () => 
   const node = process.execPath;
   const dirty = WORKER.replace('const TL_COOKIE = "";', 'const TL_COOKIE = "tluid=1; tlpass=leaked";');
   assert.notEqual(dirty, WORKER);
+  // A copy of the repository with the dirty file in it, written here rather
+  // than handed to the child as text: the source is past the 128 KiB that
+  // Linux allows one command-line argument to be.
+  const room = mkdtempSync(join(tmpdir(), "tb-"));
+  cpSync(REPO, room, {
+    recursive: true,
+    filter: (p) => !/node_modules|\/\.git|\/site|\/scratch/u.test(p),
+  });
+  writeFileSync(join(room, "worker/src/worker.js"), dirty);
   const script = `
-    import { writeFileSync, mkdtempSync, cpSync } from "node:fs";
-    import { tmpdir } from "node:os";
-    import { join } from "node:path";
-    const room = mkdtempSync(join(tmpdir(), "tb-"));
-    cpSync(${JSON.stringify(REPO)}, room, { recursive: true, filter: (p) => !p.includes("node_modules") && !p.includes("/.git") });
-    writeFileSync(join(room, "worker/src/worker.js"), ${JSON.stringify(dirty)});
     try {
-      await import(new URL("file://" + join(room, "worker/tools/build.mjs")).href);
+      await import(${JSON.stringify(pathToFileURL(join(room, "worker/tools/build.mjs")).href)});
       console.log("BUILT");
     } catch (thrown) {
       console.log("REFUSED: " + thrown.message);
     }
   `;
-  const out = execFileSync(node, ["--input-type=module", "-e", script], { encoding: "utf8" });
+  let out;
+  try {
+    out = execFileSync(node, ["--input-type=module", "-e", script], { encoding: "utf8" });
+  } finally {
+    rmSync(room, { recursive: true, force: true });
+  }
   assert.match(out, /^REFUSED: /m, `the build published a file with a session in it:\n${out}`);
   assert.match(out, /TL_COOKIE/);
 });
